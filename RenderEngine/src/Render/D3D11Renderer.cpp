@@ -39,6 +39,7 @@ namespace {
 
 constexpr UINT window_width = 1280;
 constexpr UINT window_height = 720;
+constexpr UINT shadow_map_size = 2048;
 
 struct Vertex final {
     float position[3];
@@ -49,6 +50,7 @@ struct Vertex final {
 
 struct SceneConstants final {
     XMFLOAT4X4 view_projection;
+    XMFLOAT4X4 light_view_projection;
     XMFLOAT4 camera_position;
     XMFLOAT4 sun_direction;
     XMFLOAT4 fog_color_and_density;
@@ -80,6 +82,7 @@ constexpr std::array<Face, 6> block_faces{{
 constexpr char vertex_shader_source[] = R"(
 cbuffer SceneConstants : register(b0) {
     matrix viewProjection;
+    matrix lightViewProjection;
     float4 cameraPosition;
     float4 sunDirection;
     float4 fogColorAndDensity;
@@ -92,6 +95,7 @@ struct VSInput {
 };
 struct PSInput {
     float4 position : SV_POSITION;
+    float4 lightPosition : TEXCOORD1;
     float3 worldPosition : POSITION1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD;
@@ -100,6 +104,8 @@ struct PSInput {
 PSInput main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), viewProjection);
+    output.lightPosition =
+        mul(float4(input.position, 1.0), lightViewProjection);
     output.worldPosition = input.position;
     output.normal = input.normal;
     output.uv = input.uv;
@@ -109,20 +115,68 @@ PSInput main(VSInput input) {
 
 constexpr char pixel_shader_source[] = R"(
 Texture2D blockAtlas : register(t0);
+Texture2D<float> shadowMap : register(t1);
+
 SamplerState blockSampler : register(s0);
+SamplerComparisonState shadowSampler : register(s1);
+
 cbuffer SceneConstants : register(b0) {
     matrix viewProjection;
+    matrix lightViewProjection;
     float4 cameraPosition;
     float4 sunDirection;
     float4 fogColorAndDensity;
 };
 struct PSInput {
     float4 position : SV_POSITION;
+    float4 lightPosition : TEXCOORD1;
     float3 worldPosition : POSITION1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD;
     float ambientOcclusion : AO;
 };
+float sampleSunShadow(
+    float4 lightPosition,
+    float3 surfaceNormal,
+    float3 lightDirection)
+{
+    const float3 projected = lightPosition.xyz / lightPosition.w;
+
+    const float2 shadowUV = float2(
+        projected.x * 0.5 + 0.5,
+        -projected.y * 0.5 + 0.5);
+
+    if (shadowUV.x < 0.0 || shadowUV.x > 1.0 ||
+        shadowUV.y < 0.0 || shadowUV.y > 1.0 ||
+        projected.z < 0.0 || projected.z > 1.0)
+        return 1.0;
+
+    const float normalLight =
+        saturate(dot(surfaceNormal, lightDirection));
+
+    const float bias = max(
+        0.00010,
+        0.00060 * (1.0 - normalLight));
+
+    const float2 shadowTexel =
+        float2(1.0 / 2048.0, 1.0 / 2048.0);
+
+    float visibility = 0.0;
+
+    [unroll]
+    for (int y = -1; y <= 1; ++y) {
+        [unroll]
+        for (int x = -1; x <= 1; ++x) {
+            visibility += shadowMap.SampleCmpLevelZero(
+                shadowSampler,
+                shadowUV + float2(x, y) * shadowTexel,
+                projected.z - bias);
+        }
+    }
+
+    return visibility / 9.0;
+}
+
 float4 main(PSInput input) : SV_TARGET {
     const float2 texel = float2(1.0 / 1024.0, 1.0 / 256.0);
     const float tileStart = floor(input.uv.x * 4.0) * 0.25;
@@ -172,11 +226,25 @@ float4 main(PSInput input) : SV_TARGET {
     const float specularPower = lerp(96.0, 10.0, roughness);
     const float specular = pow(normalDotHalf, specularPower)
         * (1.0 - roughness) * normalDotLight;
-    const float hemisphere = lerp(0.16, 0.30, saturate(normal.y * 0.5 + 0.5));
-    const float shadowedDiffuse = normalDotLight * 1.38;
+    const float hemisphere =
+        lerp(0.16, 0.30, saturate(normal.y * 0.5 + 0.5));
+
+    const float rawShadow =
+        sampleSunShadow(input.lightPosition, normal, lightDirection);
+
+    const float sunVisibility =
+        lerp(0.28, 1.0, rawShadow);
+
+    const float directDiffuse =
+        normalDotLight * 1.38 * sunVisibility;
+
     float3 litColor = albedo
-        * (hemisphere + shadowedDiffuse) * input.ambientOcclusion;
-    litColor += specular * float3(1.0, 0.95, 0.86);
+        * (hemisphere + directDiffuse)
+        * input.ambientOcclusion;
+
+    litColor += specular
+        * sunVisibility
+        * float3(1.0, 0.95, 0.86);
 
     const float distanceToCamera = length(cameraPosition.xyz - input.worldPosition);
     const float fogAmount = 1.0 - exp(
@@ -606,7 +674,50 @@ private:
         depth_description.SampleDesc.Count = 1;
         depth_description.BindFlags = D3D11_BIND_DEPTH_STENCIL;
         if (FAILED(device_->CreateTexture2D(&depth_description, nullptr, &depth_texture_))
-            || FAILED(device_->CreateDepthStencilView(depth_texture_.Get(), nullptr, &depth_view_)))
+            || FAILED(device_->CreateDepthStencilView(
+                depth_texture_.Get(), nullptr, &depth_view_)))
+            return false;
+
+        D3D11_TEXTURE2D_DESC shadow_description{};
+        shadow_description.Width = shadow_map_size;
+        shadow_description.Height = shadow_map_size;
+        shadow_description.MipLevels = 1;
+        shadow_description.ArraySize = 1;
+        shadow_description.Format = DXGI_FORMAT_R32_TYPELESS;
+        shadow_description.SampleDesc.Count = 1;
+        shadow_description.Usage = D3D11_USAGE_DEFAULT;
+        shadow_description.BindFlags =
+            D3D11_BIND_DEPTH_STENCIL |
+            D3D11_BIND_SHADER_RESOURCE;
+
+        if (FAILED(device_->CreateTexture2D(
+                &shadow_description,
+                nullptr,
+                &shadow_texture_)))
+            return false;
+
+        D3D11_DEPTH_STENCIL_VIEW_DESC shadow_dsv{};
+        shadow_dsv.Format = DXGI_FORMAT_D32_FLOAT;
+        shadow_dsv.ViewDimension =
+            D3D11_DSV_DIMENSION_TEXTURE2D;
+
+        if (FAILED(device_->CreateDepthStencilView(
+                shadow_texture_.Get(),
+                &shadow_dsv,
+                &shadow_depth_view_)))
+            return false;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC shadow_srv{};
+        shadow_srv.Format = DXGI_FORMAT_R32_FLOAT;
+        shadow_srv.ViewDimension =
+            D3D11_SRV_DIMENSION_TEXTURE2D;
+        shadow_srv.Texture2D.MostDetailedMip = 0;
+        shadow_srv.Texture2D.MipLevels = 1;
+
+        if (FAILED(device_->CreateShaderResourceView(
+                shadow_texture_.Get(),
+                &shadow_srv,
+                &shadow_shader_resource_)))
             return false;
 
         ComPtr<ID3DBlob> vertex_bytecode;
@@ -662,8 +773,57 @@ private:
         rasterizer_description.FillMode = D3D11_FILL_SOLID;
         rasterizer_description.CullMode = D3D11_CULL_NONE;
         rasterizer_description.DepthClipEnable = TRUE;
-        if (FAILED(device_->CreateRasterizerState(&rasterizer_description, &rasterizer_)))
+        if (FAILED(device_->CreateRasterizerState(
+                &rasterizer_description, &rasterizer_)))
             return false;
+
+        D3D11_RASTERIZER_DESC shadow_rasterizer_description{};
+        shadow_rasterizer_description.FillMode =
+            D3D11_FILL_SOLID;
+        shadow_rasterizer_description.CullMode =
+            D3D11_CULL_NONE;
+        shadow_rasterizer_description.DepthClipEnable = TRUE;
+        shadow_rasterizer_description.DepthBias = 100;
+        shadow_rasterizer_description.SlopeScaledDepthBias = 1.5F;
+        shadow_rasterizer_description.DepthBiasClamp = 0.01F;
+
+        if (FAILED(device_->CreateRasterizerState(
+                &shadow_rasterizer_description,
+                &shadow_rasterizer_)))
+            return false;
+
+        D3D11_SAMPLER_DESC shadow_sampler_description{};
+        shadow_sampler_description.Filter =
+            D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+        shadow_sampler_description.AddressU =
+            D3D11_TEXTURE_ADDRESS_BORDER;
+        shadow_sampler_description.AddressV =
+            D3D11_TEXTURE_ADDRESS_BORDER;
+        shadow_sampler_description.AddressW =
+            D3D11_TEXTURE_ADDRESS_BORDER;
+        shadow_sampler_description.BorderColor[0] = 1.0F;
+        shadow_sampler_description.BorderColor[1] = 1.0F;
+        shadow_sampler_description.BorderColor[2] = 1.0F;
+        shadow_sampler_description.BorderColor[3] = 1.0F;
+        shadow_sampler_description.ComparisonFunc =
+            D3D11_COMPARISON_LESS_EQUAL;
+        shadow_sampler_description.MinLOD = 0.0F;
+        shadow_sampler_description.MaxLOD =
+            D3D11_FLOAT32_MAX;
+
+        if (FAILED(device_->CreateSamplerState(
+                &shadow_sampler_description,
+                &shadow_sampler_)))
+            return false;
+
+        shadow_viewport_.TopLeftX = 0.0F;
+        shadow_viewport_.TopLeftY = 0.0F;
+        shadow_viewport_.Width =
+            static_cast<float>(shadow_map_size);
+        shadow_viewport_.Height =
+            static_cast<float>(shadow_map_size);
+        shadow_viewport_.MinDepth = 0.0F;
+        shadow_viewport_.MaxDepth = 1.0F;
 
         viewport_.TopLeftX = 0.0F;
         viewport_.TopLeftY = 0.0F;
@@ -992,17 +1152,155 @@ private:
             XMConvertToRadians(65.0F),
             static_cast<float>(window_width) / static_cast<float>(window_height),
             0.1F, 250.0F);
-        if (!handle_block_edits(pointer_ray(view, projection, forward))) return false;
-        SceneConstants constants{};
-        XMStoreFloat4x4(&constants.view_projection,
-                        XMMatrixTranspose(view * projection));
-        constants.camera_position = {
-            camera_position_.x, camera_position_.y, camera_position_.z, 1.0F};
-        constants.sun_direction = {0.45F, -0.82F, 0.34F, 0.0F};
-        constants.fog_color_and_density = {0.36F, 0.55F, 0.72F, 0.00008F};
-        context_->UpdateSubresource(scene_constants_.Get(), 0, nullptr, &constants, 0, 0);
+        if (!handle_block_edits(
+                pointer_ray(view, projection, forward)))
+            return false;
 
-        constexpr float clear_color[4]{0.36F, 0.55F, 0.72F, 1.0F};
+        const XMVECTOR sun_direction =
+            XMVector3Normalize(
+                XMVectorSet(0.45F, -0.82F, 0.34F, 0.0F));
+
+        const XMVECTOR shadow_center =
+            XMVectorSet(
+                camera_position_.x,
+                4.0F,
+                camera_position_.z,
+                1.0F);
+
+        const XMVECTOR light_position =
+            XMVectorSubtract(
+                shadow_center,
+                XMVectorScale(sun_direction, 75.0F));
+
+        const XMMATRIX light_view =
+            XMMatrixLookAtLH(
+                light_position,
+                shadow_center,
+                XMVectorSet(0.0F, 1.0F, 0.0F, 0.0F));
+
+        const XMMATRIX light_projection =
+            XMMatrixOrthographicLH(
+                96.0F,
+                96.0F,
+                1.0F,
+                170.0F);
+
+        const XMMATRIX light_view_projection =
+            light_view * light_projection;
+
+        SceneConstants constants{};
+
+        XMStoreFloat4x4(
+            &constants.light_view_projection,
+            XMMatrixTranspose(light_view_projection));
+
+        constants.camera_position = {
+            camera_position_.x,
+            camera_position_.y,
+            camera_position_.z,
+            1.0F
+        };
+
+        constants.sun_direction =
+            {0.45F, -0.82F, 0.34F, 0.0F};
+
+        constants.fog_color_and_density =
+            {0.36F, 0.55F, 0.72F, 0.00008F};
+
+        constexpr UINT stride = sizeof(Vertex);
+        constexpr UINT offset = 0;
+
+        ID3D11Buffer* buffers[]{
+            vertex_buffer_.Get()
+        };
+
+        ID3D11Buffer* constants_buffer[]{
+            scene_constants_.Get()
+        };
+
+        context_->IASetInputLayout(input_layout_.Get());
+        context_->IASetVertexBuffers(
+            0, 1, buffers, &stride, &offset);
+        context_->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        // ------------------------------------------------------
+        // SUN SHADOW DEPTH PASS
+        // ------------------------------------------------------
+
+        XMStoreFloat4x4(
+            &constants.view_projection,
+            XMMatrixTranspose(light_view_projection));
+
+        context_->UpdateSubresource(
+            scene_constants_.Get(),
+            0,
+            nullptr,
+            &constants,
+            0,
+            0);
+
+        ID3D11ShaderResourceView* null_shadow_resource[]{
+            nullptr
+        };
+
+        context_->PSSetShaderResources(
+            1, 1, null_shadow_resource);
+
+        context_->ClearDepthStencilView(
+            shadow_depth_view_.Get(),
+            D3D11_CLEAR_DEPTH,
+            1.0F,
+            0);
+
+        context_->OMSetRenderTargets(
+            0,
+            nullptr,
+            shadow_depth_view_.Get());
+
+        context_->RSSetViewports(
+            1,
+            &shadow_viewport_);
+
+        context_->RSSetState(
+            shadow_rasterizer_.Get());
+
+        context_->VSSetShader(
+            vertex_shader_.Get(),
+            nullptr,
+            0);
+
+        context_->VSSetConstantBuffers(
+            0,
+            1,
+            constants_buffer);
+
+        context_->PSSetShader(
+            nullptr,
+            nullptr,
+            0);
+
+        context_->Draw(vertex_count_, 0);
+
+        // ------------------------------------------------------
+        // MAIN CAMERA / PBR PASS
+        // ------------------------------------------------------
+
+        XMStoreFloat4x4(
+            &constants.view_projection,
+            XMMatrixTranspose(view * projection));
+
+        context_->UpdateSubresource(
+            scene_constants_.Get(),
+            0,
+            nullptr,
+            &constants,
+            0,
+            0);
+
+        constexpr float clear_color[4]{
+            0.36F, 0.55F, 0.72F, 1.0F
+        };
         context_->ClearRenderTargetView(render_target_.Get(), clear_color);
         context_->ClearDepthStencilView(
             depth_view_.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0F, 0);
@@ -1011,23 +1309,52 @@ private:
         context_->RSSetViewports(1, &viewport_);
         context_->RSSetState(rasterizer_.Get());
 
-        constexpr UINT stride = sizeof(Vertex);
-        constexpr UINT offset = 0;
-        ID3D11Buffer* buffers[]{vertex_buffer_.Get()};
-        ID3D11Buffer* constants_buffer[]{scene_constants_.Get()};
-        ID3D11ShaderResourceView* textures[]{block_atlas_.Get()};
-        ID3D11SamplerState* samplers[]{block_sampler_.Get()};
+        ID3D11ShaderResourceView* textures[]{
+            block_atlas_.Get(),
+            shadow_shader_resource_.Get()
+        };
+
+        ID3D11SamplerState* samplers[]{
+            block_sampler_.Get(),
+            shadow_sampler_.Get()
+        };
+
         context_->IASetInputLayout(input_layout_.Get());
-        context_->IASetVertexBuffers(0, 1, buffers, &stride, &offset);
-        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context_->VSSetShader(vertex_shader_.Get(), nullptr, 0);
-        context_->VSSetConstantBuffers(0, 1, constants_buffer);
-        context_->PSSetShader(pixel_shader_.Get(), nullptr, 0);
-        context_->PSSetConstantBuffers(0, 1, constants_buffer);
-        context_->PSSetShaderResources(0, 1, textures);
-        context_->PSSetSamplers(0, 1, samplers);
+        context_->IASetVertexBuffers(
+            0, 1, buffers, &stride, &offset);
+        context_->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        context_->VSSetShader(
+            vertex_shader_.Get(), nullptr, 0);
+
+        context_->VSSetConstantBuffers(
+            0, 1, constants_buffer);
+
+        context_->PSSetShader(
+            pixel_shader_.Get(), nullptr, 0);
+
+        context_->PSSetConstantBuffers(
+            0, 1, constants_buffer);
+
+        context_->PSSetShaderResources(
+            0, 2, textures);
+
+        context_->PSSetSamplers(
+            0, 2, samplers);
+
         context_->Draw(vertex_count_, 0);
-        return SUCCEEDED(swap_chain_->Present(1, 0));
+
+        // Unbind before the next frame uses this texture as a DSV.
+        ID3D11ShaderResourceView* null_shadow[]{
+            nullptr
+        };
+
+        context_->PSSetShaderResources(
+            1, 1, null_shadow);
+
+        return SUCCEEDED(
+            swap_chain_->Present(1, 0));
     }
 
     void cleanup() noexcept {
@@ -1044,15 +1371,25 @@ private:
     ComPtr<ID3D11RenderTargetView> render_target_;
     ComPtr<ID3D11Texture2D> depth_texture_;
     ComPtr<ID3D11DepthStencilView> depth_view_;
+
+    ComPtr<ID3D11Texture2D> shadow_texture_;
+    ComPtr<ID3D11DepthStencilView> shadow_depth_view_;
+    ComPtr<ID3D11ShaderResourceView> shadow_shader_resource_;
+
     ComPtr<ID3D11VertexShader> vertex_shader_;
     ComPtr<ID3D11PixelShader> pixel_shader_;
     ComPtr<ID3D11InputLayout> input_layout_;
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> scene_constants_;
     ComPtr<ID3D11RasterizerState> rasterizer_;
+    ComPtr<ID3D11RasterizerState> shadow_rasterizer_;
+
     ComPtr<ID3D11ShaderResourceView> block_atlas_;
     ComPtr<ID3D11SamplerState> block_sampler_;
+    ComPtr<ID3D11SamplerState> shadow_sampler_;
+
     D3D11_VIEWPORT viewport_{};
+    D3D11_VIEWPORT shadow_viewport_{};
     UINT vertex_count_{0};
     ChunkWorld world_;
     XMFLOAT3 camera_position_{8.0F, 11.0F, -16.0F};
