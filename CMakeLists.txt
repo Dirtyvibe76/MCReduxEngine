@@ -41,7 +41,9 @@ add_library(RenderEngine RenderEngine/src/Render/D3D11Renderer.cpp)
 target_include_directories(RenderEngine PUBLIC RenderEngine/include)
 target_link_libraries(RenderEngine PUBLIC CoreEngine WorldEngine)
 
-add_library(MCReduxGame MCReduxGame/src/Game/Game.cpp)
+add_library(MCReduxGame
+    MCReduxGame/src/Game/Game.cpp
+    MCReduxGame/src/Game/StaminaSystem.cpp)
 target_include_directories(MCReduxGame PUBLIC MCReduxGame/include)
 target_link_libraries(MCReduxGame PUBLIC CoreEngine WorldEngine PhysicsEngine CombatEngine AIEngine WorldgenEngine RenderEngine)
 
