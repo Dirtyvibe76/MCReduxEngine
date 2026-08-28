@@ -172,8 +172,8 @@ float4 main(PSInput input) : SV_TARGET {
     const float specularPower = lerp(96.0, 10.0, roughness);
     const float specular = pow(normalDotHalf, specularPower)
         * (1.0 - roughness) * normalDotLight;
-    const float hemisphere = lerp(0.18, 0.34, saturate(normal.y * 0.5 + 0.5));
-    const float shadowedDiffuse = normalDotLight * 1.15;
+    const float hemisphere = lerp(0.16, 0.30, saturate(normal.y * 0.5 + 0.5));
+    const float shadowedDiffuse = normalDotLight * 1.38;
     float3 litColor = albedo
         * (hemisphere + shadowedDiffuse) * input.ambientOcclusion;
     litColor += specular * float3(1.0, 0.95, 0.86);
@@ -182,7 +182,19 @@ float4 main(PSInput input) : SV_TARGET {
     const float fogAmount = 1.0 - exp(
         -distanceToCamera * distanceToCamera * fogColorAndDensity.w);
     litColor = lerp(litColor, fogColorAndDensity.rgb, saturate(fogAmount));
-    return float4(litColor, 1.0);
+
+    // Back buffer is currently non-sRGB, so encode the final linear result
+    // for display. This conversion must happen exactly once.
+    const float3 linearColor = max(litColor, 0.0);
+    const float3 srgbLow = linearColor * 12.92;
+    const float3 srgbHigh =
+        1.055 * pow(max(linearColor, 0.000001), 1.0 / 2.4) - 0.055;
+    const float3 srgbColor = lerp(
+        srgbHigh,
+        srgbLow,
+        1.0 - step(0.0031308, linearColor));
+
+    return float4(saturate(srgbColor), 1.0);
 }
 )";
 
@@ -987,7 +999,7 @@ private:
         constants.camera_position = {
             camera_position_.x, camera_position_.y, camera_position_.z, 1.0F};
         constants.sun_direction = {0.45F, -0.82F, 0.34F, 0.0F};
-        constants.fog_color_and_density = {0.36F, 0.55F, 0.72F, 0.00035F};
+        constants.fog_color_and_density = {0.36F, 0.55F, 0.72F, 0.00008F};
         context_->UpdateSubresource(scene_constants_.Get(), 0, nullptr, &constants, 0, 0);
 
         constexpr float clear_color[4]{0.36F, 0.55F, 0.72F, 1.0F};
