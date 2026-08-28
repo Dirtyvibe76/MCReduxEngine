@@ -40,6 +40,7 @@ namespace {
 constexpr UINT window_width = 1280;
 constexpr UINT window_height = 720;
 constexpr UINT shadow_map_size = 2048;
+constexpr UINT shadow_cascade_count = 3;
 
 struct Vertex final {
     float position[3];
@@ -50,10 +51,11 @@ struct Vertex final {
 
 struct SceneConstants final {
     XMFLOAT4X4 view_projection;
-    XMFLOAT4X4 light_view_projection;
+    XMFLOAT4X4 cascade_light_view_projection[shadow_cascade_count];
     XMFLOAT4 camera_position;
     XMFLOAT4 sun_direction;
     XMFLOAT4 fog_color_and_density;
+    XMFLOAT4 cascade_splits;
 };
 
 struct Face final {
@@ -82,10 +84,11 @@ constexpr std::array<Face, 6> block_faces{{
 constexpr char vertex_shader_source[] = R"(
 cbuffer SceneConstants : register(b0) {
     matrix viewProjection;
-    matrix lightViewProjection;
+    matrix cascadeLightViewProjection[3];
     float4 cameraPosition;
     float4 sunDirection;
     float4 fogColorAndDensity;
+    float4 cascadeSplits;
 };
 struct VSInput {
     float3 position : POSITION;
@@ -95,7 +98,6 @@ struct VSInput {
 };
 struct PSInput {
     float4 position : SV_POSITION;
-    float4 lightPosition : TEXCOORD1;
     float3 worldPosition : POSITION1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD;
@@ -104,8 +106,6 @@ struct PSInput {
 PSInput main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), viewProjection);
-    output.lightPosition =
-        mul(float4(input.position, 1.0), lightViewProjection);
     output.worldPosition = input.position;
     output.normal = input.normal;
     output.uv = input.uv;
@@ -115,32 +115,46 @@ PSInput main(VSInput input) {
 
 constexpr char pixel_shader_source[] = R"(
 Texture2D blockAtlas : register(t0);
-Texture2D<float> shadowMap : register(t1);
+Texture2DArray<float> shadowMap : register(t1);
 
 SamplerState blockSampler : register(s0);
 SamplerComparisonState shadowSampler : register(s1);
 
 cbuffer SceneConstants : register(b0) {
     matrix viewProjection;
-    matrix lightViewProjection;
+    matrix cascadeLightViewProjection[3];
     float4 cameraPosition;
     float4 sunDirection;
     float4 fogColorAndDensity;
+    float4 cascadeSplits;
 };
 struct PSInput {
     float4 position : SV_POSITION;
-    float4 lightPosition : TEXCOORD1;
     float3 worldPosition : POSITION1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD;
     float ambientOcclusion : AO;
 };
-float sampleSunShadow(
-    float4 lightPosition,
-    float3 surfaceNormal,
-    float3 lightDirection)
+
+int selectShadowCascade(float distanceToCamera)
 {
-    const float3 projected = lightPosition.xyz / lightPosition.w;
+    if (distanceToCamera < cascadeSplits.x) return 0;
+    if (distanceToCamera < cascadeSplits.y) return 1;
+    return 2;
+}
+
+float sampleSunShadow(
+    float3 worldPosition,
+    float3 surfaceNormal,
+    float3 lightDirection,
+    int cascadeIndex)
+{
+    const float4 lightPosition = mul(
+        float4(worldPosition, 1.0),
+        cascadeLightViewProjection[cascadeIndex]);
+
+    const float3 projected =
+        lightPosition.xyz / lightPosition.w;
 
     const float2 shadowUV = float2(
         projected.x * 0.5 + 0.5,
@@ -154,9 +168,14 @@ float sampleSunShadow(
     const float normalLight =
         saturate(dot(surfaceNormal, lightDirection));
 
+    const float cascadeBiasScale =
+        cascadeIndex == 0 ? 1.0 :
+        cascadeIndex == 1 ? 1.35 : 1.75;
+
     const float bias = max(
-        0.00010,
-        0.00060 * (1.0 - normalLight));
+        0.00008,
+        0.00045 * (1.0 - normalLight))
+        * cascadeBiasScale;
 
     const float2 shadowTexel =
         float2(1.0 / 2048.0, 1.0 / 2048.0);
@@ -169,7 +188,9 @@ float sampleSunShadow(
         for (int x = -1; x <= 1; ++x) {
             visibility += shadowMap.SampleCmpLevelZero(
                 shadowSampler,
-                shadowUV + float2(x, y) * shadowTexel,
+                float3(
+                    shadowUV + float2(x, y) * shadowTexel,
+                    cascadeIndex),
                 projected.z - bias);
         }
     }
@@ -229,8 +250,18 @@ float4 main(PSInput input) : SV_TARGET {
     const float hemisphere =
         lerp(0.16, 0.30, saturate(normal.y * 0.5 + 0.5));
 
+    const float distanceToCamera =
+        length(cameraPosition.xyz - input.worldPosition);
+
+    const int cascadeIndex =
+        selectShadowCascade(distanceToCamera);
+
     const float rawShadow =
-        sampleSunShadow(input.lightPosition, normal, lightDirection);
+        sampleSunShadow(
+            input.worldPosition,
+            normal,
+            lightDirection,
+            cascadeIndex);
 
     const float sunVisibility =
         lerp(0.28, 1.0, rawShadow);
@@ -246,7 +277,6 @@ float4 main(PSInput input) : SV_TARGET {
         * sunVisibility
         * float3(1.0, 0.95, 0.86);
 
-    const float distanceToCamera = length(cameraPosition.xyz - input.worldPosition);
     const float fogAmount = 1.0 - exp(
         -distanceToCamera * distanceToCamera * fogColorAndDensity.w);
     litColor = lerp(litColor, fogColorAndDensity.rgb, saturate(fogAmount));
@@ -682,7 +712,7 @@ private:
         shadow_description.Width = shadow_map_size;
         shadow_description.Height = shadow_map_size;
         shadow_description.MipLevels = 1;
-        shadow_description.ArraySize = 1;
+        shadow_description.ArraySize = shadow_cascade_count;
         shadow_description.Format = DXGI_FORMAT_R32_TYPELESS;
         shadow_description.SampleDesc.Count = 1;
         shadow_description.Usage = D3D11_USAGE_DEFAULT;
@@ -696,23 +726,33 @@ private:
                 &shadow_texture_)))
             return false;
 
-        D3D11_DEPTH_STENCIL_VIEW_DESC shadow_dsv{};
-        shadow_dsv.Format = DXGI_FORMAT_D32_FLOAT;
-        shadow_dsv.ViewDimension =
-            D3D11_DSV_DIMENSION_TEXTURE2D;
+        for (UINT cascade = 0;
+             cascade < shadow_cascade_count;
+             ++cascade) {
+            D3D11_DEPTH_STENCIL_VIEW_DESC shadow_dsv{};
+            shadow_dsv.Format = DXGI_FORMAT_D32_FLOAT;
+            shadow_dsv.ViewDimension =
+                D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+            shadow_dsv.Texture2DArray.MipSlice = 0;
+            shadow_dsv.Texture2DArray.FirstArraySlice = cascade;
+            shadow_dsv.Texture2DArray.ArraySize = 1;
 
-        if (FAILED(device_->CreateDepthStencilView(
-                shadow_texture_.Get(),
-                &shadow_dsv,
-                &shadow_depth_view_)))
-            return false;
+            if (FAILED(device_->CreateDepthStencilView(
+                    shadow_texture_.Get(),
+                    &shadow_dsv,
+                    &shadow_depth_views_[cascade])))
+                return false;
+        }
 
         D3D11_SHADER_RESOURCE_VIEW_DESC shadow_srv{};
         shadow_srv.Format = DXGI_FORMAT_R32_FLOAT;
         shadow_srv.ViewDimension =
-            D3D11_SRV_DIMENSION_TEXTURE2D;
-        shadow_srv.Texture2D.MostDetailedMip = 0;
-        shadow_srv.Texture2D.MipLevels = 1;
+            D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        shadow_srv.Texture2DArray.MostDetailedMip = 0;
+        shadow_srv.Texture2DArray.MipLevels = 1;
+        shadow_srv.Texture2DArray.FirstArraySlice = 0;
+        shadow_srv.Texture2DArray.ArraySize =
+            shadow_cascade_count;
 
         if (FAILED(device_->CreateShaderResourceView(
                 shadow_texture_.Get(),
@@ -1160,39 +1200,71 @@ private:
             XMVector3Normalize(
                 XMVectorSet(0.45F, -0.82F, 0.34F, 0.0F));
 
-        const XMVECTOR shadow_center =
-            XMVectorSet(
-                camera_position_.x,
-                4.0F,
-                camera_position_.z,
-                1.0F);
+        constexpr std::array<float, shadow_cascade_count>
+            cascade_ranges{24.0F, 52.0F, 96.0F};
 
-        const XMVECTOR light_position =
-            XMVectorSubtract(
-                shadow_center,
-                XMVectorScale(sun_direction, 75.0F));
+        constexpr std::array<float, shadow_cascade_count>
+            cascade_sizes{34.0F, 70.0F, 132.0F};
 
-        const XMMATRIX light_view =
-            XMMatrixLookAtLH(
-                light_position,
-                shadow_center,
-                XMVectorSet(0.0F, 1.0F, 0.0F, 0.0F));
+        std::array<XMMATRIX, shadow_cascade_count>
+            cascade_light_view_projection{};
 
-        const XMMATRIX light_projection =
-            XMMatrixOrthographicLH(
-                96.0F,
-                96.0F,
-                1.0F,
-                170.0F);
+        for (UINT cascade = 0;
+             cascade < shadow_cascade_count;
+             ++cascade) {
 
-        const XMMATRIX light_view_projection =
-            light_view * light_projection;
+            // Shift wider cascades farther along the player's view
+            // direction so shadow texels are spent where they matter.
+            const float forward_offset =
+                cascade_ranges[cascade] * 0.28F;
+
+            const XMVECTOR cascade_center =
+                XMVectorAdd(
+                    position,
+                    XMVectorScale(forward, forward_offset));
+
+            XMFLOAT3 center{};
+            XMStoreFloat3(&center, cascade_center);
+
+            const XMVECTOR shadow_center =
+                XMVectorSet(
+                    center.x,
+                    4.0F,
+                    center.z,
+                    1.0F);
+
+            const XMVECTOR light_position =
+                XMVectorSubtract(
+                    shadow_center,
+                    XMVectorScale(sun_direction, 90.0F));
+
+            const XMMATRIX light_view =
+                XMMatrixLookAtLH(
+                    light_position,
+                    shadow_center,
+                    XMVectorSet(0.0F, 1.0F, 0.0F, 0.0F));
+
+            const XMMATRIX light_projection =
+                XMMatrixOrthographicLH(
+                    cascade_sizes[cascade],
+                    cascade_sizes[cascade],
+                    1.0F,
+                    200.0F);
+
+            cascade_light_view_projection[cascade] =
+                light_view * light_projection;
+        }
 
         SceneConstants constants{};
 
-        XMStoreFloat4x4(
-            &constants.light_view_projection,
-            XMMatrixTranspose(light_view_projection));
+        for (UINT cascade = 0;
+             cascade < shadow_cascade_count;
+             ++cascade) {
+            XMStoreFloat4x4(
+                &constants.cascade_light_view_projection[cascade],
+                XMMatrixTranspose(
+                    cascade_light_view_projection[cascade]));
+        }
 
         constants.camera_position = {
             camera_position_.x,
@@ -1206,6 +1278,9 @@ private:
 
         constants.fog_color_and_density =
             {0.36F, 0.55F, 0.72F, 0.00008F};
+
+        constants.cascade_splits =
+            {24.0F, 52.0F, 96.0F, 0.0F};
 
         constexpr UINT stride = sizeof(Vertex);
         constexpr UINT offset = 0;
@@ -1225,20 +1300,8 @@ private:
             D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         // ------------------------------------------------------
-        // SUN SHADOW DEPTH PASS
+        // CASCADED SUN SHADOW DEPTH PASSES
         // ------------------------------------------------------
-
-        XMStoreFloat4x4(
-            &constants.view_projection,
-            XMMatrixTranspose(light_view_projection));
-
-        context_->UpdateSubresource(
-            scene_constants_.Get(),
-            0,
-            nullptr,
-            &constants,
-            0,
-            0);
 
         ID3D11ShaderResourceView* null_shadow_resource[]{
             nullptr
@@ -1246,17 +1309,6 @@ private:
 
         context_->PSSetShaderResources(
             1, 1, null_shadow_resource);
-
-        context_->ClearDepthStencilView(
-            shadow_depth_view_.Get(),
-            D3D11_CLEAR_DEPTH,
-            1.0F,
-            0);
-
-        context_->OMSetRenderTargets(
-            0,
-            nullptr,
-            shadow_depth_view_.Get());
 
         context_->RSSetViewports(
             1,
@@ -1280,7 +1332,36 @@ private:
             nullptr,
             0);
 
-        context_->Draw(vertex_count_, 0);
+        for (UINT cascade = 0;
+             cascade < shadow_cascade_count;
+             ++cascade) {
+
+            XMStoreFloat4x4(
+                &constants.view_projection,
+                XMMatrixTranspose(
+                    cascade_light_view_projection[cascade]));
+
+            context_->UpdateSubresource(
+                scene_constants_.Get(),
+                0,
+                nullptr,
+                &constants,
+                0,
+                0);
+
+            context_->ClearDepthStencilView(
+                shadow_depth_views_[cascade].Get(),
+                D3D11_CLEAR_DEPTH,
+                1.0F,
+                0);
+
+            context_->OMSetRenderTargets(
+                0,
+                nullptr,
+                shadow_depth_views_[cascade].Get());
+
+            context_->Draw(vertex_count_, 0);
+        }
 
         // ------------------------------------------------------
         // MAIN CAMERA / PBR PASS
@@ -1373,7 +1454,9 @@ private:
     ComPtr<ID3D11DepthStencilView> depth_view_;
 
     ComPtr<ID3D11Texture2D> shadow_texture_;
-    ComPtr<ID3D11DepthStencilView> shadow_depth_view_;
+    std::array<
+        ComPtr<ID3D11DepthStencilView>,
+        shadow_cascade_count> shadow_depth_views_;
     ComPtr<ID3D11ShaderResourceView> shadow_shader_resource_;
 
     ComPtr<ID3D11VertexShader> vertex_shader_;
