@@ -10,14 +10,16 @@ StaminaSystem::StaminaSystem(StaminaConfig config) noexcept
 void StaminaSystem::update(
     PlayerController& player,
     const double delta_seconds,
-    const bool sprinting) const noexcept {
+    const bool sprint_requested) const noexcept {
 
     const float dt =
         static_cast<float>(std::max(0.0, delta_seconds));
 
-    if (sprinting && can_sprint(player)) {
-        player.stamina -=
-            config_.sprint_drain_per_second * dt;
+    if (sprint_requested) {
+        if (can_sprint(player)) {
+            player.stamina -=
+                config_.sprint_drain_per_second * dt;
+        }
     } else {
         player.stamina +=
             config_.regeneration_per_second * dt;

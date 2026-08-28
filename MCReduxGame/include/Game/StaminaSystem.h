@@ -23,7 +23,7 @@ public:
     void update(
         PlayerController& player,
         double delta_seconds,
-        bool sprinting) const noexcept;
+        bool sprint_requested) const noexcept;
 
     [[nodiscard]] bool consume_jump(PlayerController& player) const noexcept;
 

@@ -314,6 +314,18 @@ float4 main(PSInput input) : SV_TARGET {
 )";
 
 
+constexpr char hud_pixel_shader_source[] = R"(
+cbuffer HudConstants : register(b2)
+{
+    float4 hudColor;
+};
+
+float4 main(float4 position : SV_POSITION) : SV_TARGET
+{
+    return hudColor;
+}
+)";
+
 constexpr char sky_vertex_shader_source[] = R"(
 struct VSOutput {
     float4 position : SV_POSITION;
@@ -428,6 +440,10 @@ float4 main(PSInput input) : SV_TARGET
     return float4(saturate(srgbColor), 1.0);
 }
 )";
+
+struct HudConstants final {
+    XMFLOAT4 color;
+};
 
 struct SkyConstants final {
     XMFLOAT4X4 inverse_view_projection;
@@ -748,6 +764,10 @@ std::vector<Vertex> mesh_world(const ChunkWorld& world) {
 
 class VisualDemo final {
 public:
+    explicit VisualDemo(
+        const mcr::render::PlayerControlHooks* player_controls = nullptr) noexcept
+        : player_controls_(player_controls) {}
+
     bool run() noexcept {
         if (!create_window() || !create_graphics()) {
             cleanup();
@@ -906,6 +926,7 @@ private:
         ComPtr<ID3DBlob> pixel_bytecode;
         ComPtr<ID3DBlob> sky_vertex_bytecode;
         ComPtr<ID3DBlob> sky_pixel_bytecode;
+        ComPtr<ID3DBlob> hud_pixel_bytecode;
         ComPtr<ID3DBlob> errors;
         UINT compile_flags = 0;
 #if defined(_DEBUG)
@@ -944,6 +965,16 @@ private:
                 &errors)))
             return false;
 
+        if (FAILED(D3DCompile(
+                hud_pixel_shader_source,
+                sizeof(hud_pixel_shader_source) - 1,
+                nullptr, nullptr, nullptr,
+                "main", "ps_5_0",
+                compile_flags, 0,
+                &hud_pixel_bytecode,
+                &errors)))
+            return false;
+
         if (FAILED(device_->CreateVertexShader(
                 sky_vertex_bytecode->GetBufferPointer(),
                 sky_vertex_bytecode->GetBufferSize(),
@@ -953,7 +984,12 @@ private:
                 sky_pixel_bytecode->GetBufferPointer(),
                 sky_pixel_bytecode->GetBufferSize(),
                 nullptr,
-                &sky_pixel_shader_)))
+                &sky_pixel_shader_))
+            || FAILED(device_->CreatePixelShader(
+                hud_pixel_bytecode->GetBufferPointer(),
+                hud_pixel_bytecode->GetBufferSize(),
+                nullptr,
+                &hud_pixel_shader_)))
             return false;
 
         constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 4> input_elements{{
@@ -993,6 +1029,18 @@ private:
                 &sky_constant_description,
                 nullptr,
                 &sky_constants_)))
+            return false;
+
+        D3D11_BUFFER_DESC hud_constant_description{};
+        hud_constant_description.ByteWidth = sizeof(HudConstants);
+        hud_constant_description.Usage = D3D11_USAGE_DEFAULT;
+        hud_constant_description.BindFlags =
+            D3D11_BIND_CONSTANT_BUFFER;
+
+        if (FAILED(device_->CreateBuffer(
+                &hud_constant_description,
+                nullptr,
+                &hud_constants_)))
             return false;
 
         D3D11_RASTERIZER_DESC rasterizer_description{};
@@ -1246,8 +1294,17 @@ private:
         if (fly_mode_ && (GetAsyncKeyState('Q') & 0x8000))
             movement = XMVectorSubtract(movement, XMVectorSet(0, 1, 0, 0));
 
+        const bool has_movement =
+            XMVectorGetX(XMVector3LengthSq(movement)) > 0.0F;
+
         if (fly_mode_) {
-            if (XMVectorGetX(XMVector3LengthSq(movement)) > 0.0F) {
+            // Fly mode is a development/navigation mode and does not
+            // consume gameplay stamina.
+            if (player_controls_ && player_controls_->update_stamina) {
+                player_controls_->update_stamina(delta_seconds, false);
+            }
+
+            if (has_movement) {
                 const float speed =
                     (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 18.0F : 7.0F;
                 const XMVECTOR position = XMLoadFloat3(&camera_position_);
@@ -1258,16 +1315,61 @@ private:
             return;
         }
 
+        const bool sprint_requested =
+            has_movement
+            && ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+
+        bool sprint_allowed = true;
+        if (player_controls_ && player_controls_->can_sprint) {
+            sprint_allowed = player_controls_->can_sprint();
+        }
+
+        const bool sprinting =
+            sprint_requested && sprint_allowed;
+
+        if (player_controls_ && player_controls_->update_stamina) {
+            player_controls_->update_stamina(
+                delta_seconds,
+                sprint_requested);
+        }
+
+        float stamina_movement_multiplier = 1.0F;
+        if (player_controls_ && player_controls_->movement_multiplier) {
+            stamina_movement_multiplier =
+                player_controls_->movement_multiplier();
+        }
+
         XMFLOAT3 displacement{};
-        if (XMVectorGetX(XMVector3LengthSq(movement)) > 0.0F) {
-            const float speed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 8.0F : 4.5F;
-            XMStoreFloat3(&displacement,
-                XMVectorScale(XMVector3Normalize(movement), speed * delta_seconds));
+        if (has_movement) {
+            const float speed =
+                (sprinting ? 8.0F : 4.5F)
+                * stamina_movement_multiplier;
+
+            XMStoreFloat3(
+                &displacement,
+                XMVectorScale(
+                    XMVector3Normalize(movement),
+                    speed * delta_seconds));
+
             displacement.y = 0.0F;
         }
 
-        const bool jump_down = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
-        if (jump_down && !jump_was_down_ && on_ground()) vertical_velocity_ = 8.0F;
+        const bool jump_down =
+            (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+
+        if (jump_down && !jump_was_down_ && on_ground()) {
+            bool jump_allowed = true;
+
+            if (player_controls_ && player_controls_->consume_jump) {
+                jump_allowed =
+                    player_controls_->consume_jump();
+            }
+
+            if (jump_allowed) {
+                vertical_velocity_ = 8.0F;
+            }
+        }
+
         jump_was_down_ = jump_down;
         vertical_velocity_ = std::max(vertical_velocity_ - 24.0F * delta_seconds, -30.0F);
         displacement.y = vertical_velocity_ * delta_seconds;
@@ -1860,6 +1962,141 @@ private:
         context_->PSSetShaderResources(
             1, 1, null_shadow);
 
+        // ------------------------------------------------------
+        // STAMINA HUD
+        // ------------------------------------------------------
+
+        if (player_controls_ && player_controls_->stamina
+            && player_controls_->stamina() < 99.9F) {
+            const float stamina =
+                std::clamp(
+                    player_controls_->stamina(),
+                    0.0F,
+                    100.0F);
+
+            const float stamina_fraction =
+                stamina / 100.0F;
+
+            context_->OMSetRenderTargets(
+                1,
+                targets,
+                nullptr);
+
+            context_->IASetInputLayout(nullptr);
+            context_->IASetVertexBuffers(
+                0, 0, nullptr, nullptr, nullptr);
+            context_->IASetPrimitiveTopology(
+                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+            context_->VSSetShader(
+                sky_vertex_shader_.Get(),
+                nullptr,
+                0);
+
+            context_->PSSetShader(
+                hud_pixel_shader_.Get(),
+                nullptr,
+                0);
+
+            ID3D11Buffer* hud_buffers[]{
+                hud_constants_.Get()
+            };
+
+            context_->PSSetConstantBuffers(
+                2,
+                1,
+                hud_buffers);
+
+            constexpr float bar_x = 24.0F;
+            constexpr float bar_y =
+                static_cast<float>(window_height) - 48.0F;
+            constexpr float bar_width = 240.0F;
+            constexpr float bar_height = 18.0F;
+
+            D3D11_VIEWPORT hud_viewport{};
+            hud_viewport.TopLeftX = bar_x;
+            hud_viewport.TopLeftY = bar_y;
+            hud_viewport.Width = bar_width;
+            hud_viewport.Height = bar_height;
+            hud_viewport.MinDepth = 0.0F;
+            hud_viewport.MaxDepth = 1.0F;
+
+            context_->RSSetViewports(
+                1,
+                &hud_viewport);
+
+            HudConstants hud_constants{};
+            hud_constants.color = {
+                0.04F,
+                0.04F,
+                0.04F,
+                1.0F
+            };
+
+            context_->UpdateSubresource(
+                hud_constants_.Get(),
+                0,
+                nullptr,
+                &hud_constants,
+                0,
+                0);
+
+            context_->Draw(3, 0);
+
+            if (stamina_fraction > 0.0F) {
+                hud_viewport.TopLeftX =
+                    bar_x + 2.0F;
+                hud_viewport.TopLeftY =
+                    bar_y + 2.0F;
+                hud_viewport.Width =
+                    (bar_width - 4.0F)
+                    * stamina_fraction;
+                hud_viewport.Height =
+                    bar_height - 4.0F;
+
+                context_->RSSetViewports(
+                    1,
+                    &hud_viewport);
+
+                if (stamina > 30.0F) {
+                    hud_constants.color = {
+                        0.18F,
+                        0.78F,
+                        0.28F,
+                        1.0F
+                    };
+                } else if (stamina > 10.0F) {
+                    hud_constants.color = {
+                        0.92F,
+                        0.65F,
+                        0.12F,
+                        1.0F
+                    };
+                } else {
+                    hud_constants.color = {
+                        0.85F,
+                        0.16F,
+                        0.12F,
+                        1.0F
+                    };
+                }
+
+                context_->UpdateSubresource(
+                    hud_constants_.Get(),
+                    0,
+                    nullptr,
+                    &hud_constants,
+                    0,
+                    0);
+
+                context_->Draw(3, 0);
+            }
+
+            context_->RSSetViewports(
+                1,
+                &viewport_);
+        }
+
         return SUCCEEDED(
             swap_chain_->Present(1, 0));
     }
@@ -1869,6 +2106,8 @@ private:
         if (window_ && IsWindow(window_)) DestroyWindow(window_);
         window_ = nullptr;
     }
+
+    const mcr::render::PlayerControlHooks* player_controls_{nullptr};
 
     HINSTANCE instance_{nullptr};
     HWND window_{nullptr};
@@ -1889,10 +2128,12 @@ private:
     ComPtr<ID3D11PixelShader> pixel_shader_;
     ComPtr<ID3D11VertexShader> sky_vertex_shader_;
     ComPtr<ID3D11PixelShader> sky_pixel_shader_;
+    ComPtr<ID3D11PixelShader> hud_pixel_shader_;
     ComPtr<ID3D11InputLayout> input_layout_;
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> scene_constants_;
     ComPtr<ID3D11Buffer> sky_constants_;
+    ComPtr<ID3D11Buffer> hud_constants_;
     ComPtr<ID3D11RasterizerState> rasterizer_;
     ComPtr<ID3D11RasterizerState> shadow_rasterizer_;
 
@@ -1936,10 +2177,17 @@ bool D3D11Renderer::initialize() noexcept {
 }
 
 bool D3D11Renderer::run_visual_demo() noexcept {
+    PlayerControlHooks controls{};
+    return run_visual_demo(controls);
+}
+
+bool D3D11Renderer::run_visual_demo(
+    const PlayerControlHooks& controls) noexcept {
 #ifdef _WIN32
-    VisualDemo demo;
+    VisualDemo demo(&controls);
     return demo.run();
 #else
+    (void)controls;
     return true;
 #endif
 }
