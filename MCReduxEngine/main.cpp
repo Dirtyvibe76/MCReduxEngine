@@ -1,6 +1,9 @@
 #include "Game/Game.h"
+#include "Game/InventorySystem.h"
 #include "Game/PlayerController.h"
 #include "Game/StaminaSystem.h"
+#include "Game/ToolEfficiency.h"
+#include "Game/ToolEfficiencySystem.h"
 #include "Render/D3D11Renderer.h"
 
 #include <exception>
@@ -29,6 +32,20 @@ int main() {
 
         mcr::game::PlayerController live_player;
         mcr::game::StaminaSystem stamina_system;
+
+        mcr::game::InventorySystem inventory;
+        mcr::game::ToolEfficiencySystem tool_efficiency_system;
+
+        inventory.equip_tool(
+            0,
+            mcr::game::ToolEfficiency{
+                "Basic Pick",
+                100.0F
+            });
+
+        inventory.select_slot(0);
+
+        mcr::game::ToolEfficiency live_tool;
 
         mcr::render::PlayerControlHooks controls;
 
@@ -62,6 +79,79 @@ int main() {
         controls.stamina =
             [&]() {
                 return live_player.stamina;
+            };
+
+        controls.has_equipped_tool =
+            [&]() {
+                return inventory.has_equipped_tool();
+            };
+
+        controls.tool_performance =
+            [&]() {
+                const auto* tool =
+                    inventory.equipped_tool();
+
+                if (!tool)
+                    return 0.0F;
+
+                return tool_efficiency_system
+                    .performance_multiplier(*tool);
+            };
+
+        controls.tool_used =
+            [&]() {
+                auto* tool =
+                    inventory.equipped_tool();
+
+                if (tool)
+                    tool_efficiency_system.apply_use(*tool);
+            };
+
+        controls.tool_efficiency =
+            [&]() {
+                const auto* tool =
+                    inventory.equipped_tool();
+
+                return tool
+                    ? tool->efficiency
+                    : 0.0F;
+            };
+
+        controls.equipped_tool_name =
+            [&]() {
+                const auto* tool =
+                    inventory.equipped_tool();
+
+                return tool
+                    ? tool->name
+                    : std::string{};
+            };
+
+        controls.select_tool_slot =
+            [&](const std::size_t slot) {
+                inventory.select_slot(slot);
+            };
+
+        controls.selected_tool_slot =
+            [&]() {
+                return inventory.selected_slot();
+            };
+
+        controls.tool_performance =
+            [&]() {
+                return tool_efficiency_system.performance_multiplier(
+                    live_tool);
+            };
+
+        controls.tool_used =
+            [&]() {
+                tool_efficiency_system.apply_use(
+                    live_tool);
+            };
+
+        controls.tool_efficiency =
+            [&]() {
+                return live_tool.efficiency;
             };
 
         mcr::render::D3D11Renderer renderer;

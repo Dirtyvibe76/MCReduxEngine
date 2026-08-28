@@ -43,7 +43,8 @@ target_link_libraries(RenderEngine PUBLIC CoreEngine WorldEngine)
 
 add_library(MCReduxGame
     MCReduxGame/src/Game/Game.cpp
-    MCReduxGame/src/Game/StaminaSystem.cpp)
+    MCReduxGame/src/Game/StaminaSystem.cpp
+    MCReduxGame/src/Game/ToolEfficiencySystem.cpp)
 target_include_directories(MCReduxGame PUBLIC MCReduxGame/include)
 target_link_libraries(MCReduxGame PUBLIC CoreEngine WorldEngine PhysicsEngine CombatEngine AIEngine WorldgenEngine RenderEngine)
 
@@ -61,5 +62,22 @@ add_custom_command(TARGET MCReduxEngine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/block_albedo.png"
         "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/block_albedo.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/pick_albedo.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/pick_albedo.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/pick_normal.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/pick_normal.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/pick_roughness.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/pick_roughness.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/pick_metallic.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/pick_metallic.png"
+
     COMMENT "Copying MC-Redux runtime assets"
 )

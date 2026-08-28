@@ -49,6 +49,20 @@ struct Vertex final {
     float ambient_occlusion;
 };
 
+struct ViewmodelVertex final {
+    float position[3];
+    float normal[3];
+    float tangent[3];
+    float uv[2];
+};
+
+struct ViewmodelConstants final {
+    XMFLOAT4X4 model_view_projection;
+    XMFLOAT4X4 model;
+    XMFLOAT4 light_direction;
+    XMFLOAT4 light_color;
+};
+
 struct SceneConstants final {
     XMFLOAT4X4 view_projection;
     XMFLOAT4X4 cascade_light_view_projection[shadow_cascade_count];
@@ -314,6 +328,336 @@ float4 main(PSInput input) : SV_TARGET {
 )";
 
 
+
+constexpr char viewmodel_vertex_shader_source[] = R"(
+cbuffer ViewmodelConstants : register(b3)
+{
+    matrix modelViewProjection;
+    matrix model;
+    float4 viewmodelLightDirection;
+    float4 viewmodelLightColor;
+};
+
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+    float3 tangent : TANGENT;
+    float2 uv : TEXCOORD0;
+};
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 viewPosition : POSITION1;
+    float3 normal : NORMAL;
+    float3 tangent : TANGENT;
+    float2 uv : TEXCOORD0;
+};
+
+PSInput main(VSInput input)
+{
+    PSInput output;
+
+    float4 localPosition =
+        float4(input.position, 1.0);
+
+    output.position =
+        mul(localPosition, modelViewProjection);
+
+    float4 transformedPosition =
+        mul(localPosition, model);
+
+    output.viewPosition =
+        transformedPosition.xyz;
+
+    output.normal =
+        normalize(
+            mul(
+                float4(input.normal, 0.0),
+                model).xyz);
+
+    output.tangent =
+        normalize(
+            mul(
+                float4(input.tangent, 0.0),
+                model).xyz);
+
+    output.uv = input.uv;
+
+    return output;
+}
+)";
+
+constexpr char viewmodel_pixel_shader_source[] = R"(
+Texture2D pickAlbedo : register(t3);
+Texture2D pickNormal : register(t4);
+Texture2D pickRoughness : register(t5);
+Texture2D pickMetallic : register(t6);
+
+SamplerState pickSampler : register(s3);
+
+cbuffer ViewmodelConstants : register(b3)
+{
+    matrix modelViewProjection;
+    matrix model;
+    float4 viewmodelLightDirection;
+    float4 viewmodelLightColor;
+};
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 viewPosition : POSITION1;
+    float3 normal : NORMAL;
+    float3 tangent : TANGENT;
+    float2 uv : TEXCOORD0;
+};
+
+float distributionGGX(
+    float3 N,
+    float3 H,
+    float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+
+    float NdotH =
+        max(dot(N, H), 0.0);
+
+    float NdotH2 =
+        NdotH * NdotH;
+
+    float denominator =
+        NdotH2 * (a2 - 1.0) + 1.0;
+
+    return a2 /
+        max(
+            3.14159265
+            * denominator
+            * denominator,
+            0.0001);
+}
+
+float geometrySchlickGGX(
+    float NdotV,
+    float roughness)
+{
+    float r =
+        roughness + 1.0;
+
+    float k =
+        (r * r) / 8.0;
+
+    return NdotV /
+        max(
+            NdotV * (1.0 - k) + k,
+            0.0001);
+}
+
+float geometrySmith(
+    float3 N,
+    float3 V,
+    float3 L,
+    float roughness)
+{
+    float NdotV =
+        max(dot(N, V), 0.0);
+
+    float NdotL =
+        max(dot(N, L), 0.0);
+
+    return
+        geometrySchlickGGX(
+            NdotV,
+            roughness)
+        *
+        geometrySchlickGGX(
+            NdotL,
+            roughness);
+}
+
+float3 fresnelSchlick(
+    float cosTheta,
+    float3 F0)
+{
+    return
+        F0
+        +
+        (1.0 - F0)
+        * pow(
+            1.0 - cosTheta,
+            5.0);
+}
+
+float4 main(PSInput input) : SV_TARGET
+{
+    float3 albedo =
+        pickAlbedo.Sample(
+            pickSampler,
+            input.uv).rgb;
+
+    float roughness =
+        clamp(
+            pickRoughness.Sample(
+                pickSampler,
+                input.uv).r,
+            0.08,
+            1.0);
+
+    float metallic =
+        saturate(
+            pickMetallic.Sample(
+                pickSampler,
+                input.uv).r);
+
+    float3 sampledNormal =
+        pickNormal.Sample(
+            pickSampler,
+            input.uv).xyz
+        * 2.0 - 1.0;
+
+    float3 N =
+        normalize(input.normal);
+
+    float3 T =
+        normalize(
+            input.tangent
+            - N
+            * dot(
+                input.tangent,
+                N));
+
+    float3 B =
+        normalize(cross(N, T));
+
+    float3 mappedNormal =
+        normalize(
+            T * sampledNormal.x
+            + B * sampledNormal.y
+            + N * sampledNormal.z);
+
+    N = mappedNormal;
+
+    float3 V =
+        normalize(-input.viewPosition);
+
+    float3 L =
+        normalize(
+            -viewmodelLightDirection.xyz);
+
+    float3 H =
+        normalize(V + L);
+
+    float3 F0 =
+        lerp(
+            float3(
+                0.04,
+                0.04,
+                0.04),
+            albedo,
+            metallic);
+
+    float NDF =
+        distributionGGX(
+            N,
+            H,
+            roughness);
+
+    float G =
+        geometrySmith(
+            N,
+            V,
+            L,
+            roughness);
+
+    float3 F =
+        fresnelSchlick(
+            max(
+                dot(H, V),
+                0.0),
+            F0);
+
+    float3 numerator =
+        NDF * G * F;
+
+    float denominator =
+        max(
+            4.0
+            * max(dot(N, V), 0.0)
+            * max(dot(N, L), 0.0),
+            0.001);
+
+    float3 specular =
+        numerator / denominator;
+
+    float3 kS = F;
+
+    float3 kD =
+        (1.0 - kS)
+        * (1.0 - metallic);
+
+    float NdotL =
+        max(
+            dot(N, L),
+            0.0);
+
+    float3 radiance =
+        viewmodelLightColor.rgb
+        * viewmodelLightColor.w;
+
+    float3 direct =
+        (
+            kD
+            * albedo
+            / 3.14159265
+            + specular
+        )
+        * radiance
+        * NdotL;
+
+    // Camera-space ambient keeps the held object readable
+    // even when the world sun is behind the player.
+    float3 ambient =
+        albedo
+        * lerp(
+            0.19,
+            0.095,
+            metallic);
+
+    float3 linearColor =
+        max(
+            ambient + direct,
+            0.0);
+
+    // Back buffer is non-sRGB in the current renderer.
+    float3 srgbLow =
+        linearColor * 12.92;
+
+    float3 srgbHigh =
+        1.055
+        * pow(
+            max(
+                linearColor,
+                0.000001),
+            1.0 / 2.4)
+        - 0.055;
+
+    float3 srgbColor =
+        lerp(
+            srgbHigh,
+            srgbLow,
+            1.0
+            - step(
+                0.0031308,
+                linearColor));
+
+    return float4(
+        saturate(srgbColor),
+        1.0);
+}
+)";
+
 constexpr char hud_pixel_shader_source[] = R"(
 cbuffer HudConstants : register(b2)
 {
@@ -544,6 +888,335 @@ bool load_block_atlas(
     } catch (...) {
         return false;
     }
+}
+
+
+std::wstring texture_asset_path(
+    const wchar_t* filename)
+{
+    std::array<wchar_t, 32768> executable_path{};
+
+    const DWORD length =
+        GetModuleFileNameW(
+            nullptr,
+            executable_path.data(),
+            static_cast<DWORD>(
+                executable_path.size()));
+
+    if (length == 0
+        || length >= executable_path.size())
+        return {};
+
+    std::wstring path(
+        executable_path.data(),
+        length);
+
+    const auto separator =
+        path.find_last_of(L"\\/");
+
+    if (separator == std::wstring::npos)
+        return {};
+
+    path.resize(separator + 1);
+
+    path += L"assets\\textures\\";
+    path += filename;
+
+    return path;
+}
+
+bool load_rgba_image(
+    const wchar_t* filename,
+    std::vector<std::uint8_t>& pixels,
+    UINT& width,
+    UINT& height) noexcept
+{
+    try {
+        const HRESULT com_result =
+            CoInitializeEx(
+                nullptr,
+                COINIT_MULTITHREADED);
+
+        if (FAILED(com_result)
+            && com_result != RPC_E_CHANGED_MODE)
+            return false;
+
+        ComPtr<IWICImagingFactory> factory;
+        ComPtr<IWICBitmapDecoder> decoder;
+        ComPtr<IWICBitmapFrameDecode> frame;
+        ComPtr<IWICFormatConverter> converter;
+
+        const auto path =
+            texture_asset_path(filename);
+
+        if (path.empty())
+            return false;
+
+        if (FAILED(
+                CoCreateInstance(
+                    CLSID_WICImagingFactory,
+                    nullptr,
+                    CLSCTX_INPROC_SERVER,
+                    IID_PPV_ARGS(&factory))))
+            return false;
+
+        if (FAILED(
+                factory->CreateDecoderFromFilename(
+                    path.c_str(),
+                    nullptr,
+                    GENERIC_READ,
+                    WICDecodeMetadataCacheOnLoad,
+                    &decoder)))
+            return false;
+
+        if (FAILED(
+                decoder->GetFrame(
+                    0,
+                    &frame)))
+            return false;
+
+        if (FAILED(
+                factory->CreateFormatConverter(
+                    &converter)))
+            return false;
+
+        if (FAILED(
+                converter->Initialize(
+                    frame.Get(),
+                    GUID_WICPixelFormat32bppRGBA,
+                    WICBitmapDitherTypeNone,
+                    nullptr,
+                    0.0,
+                    WICBitmapPaletteTypeCustom)))
+            return false;
+
+        if (FAILED(
+                converter->GetSize(
+                    &width,
+                    &height)))
+            return false;
+
+        pixels.resize(
+            static_cast<std::size_t>(width)
+            * static_cast<std::size_t>(height)
+            * 4U);
+
+        return SUCCEEDED(
+            converter->CopyPixels(
+                nullptr,
+                width * 4U,
+                static_cast<UINT>(
+                    pixels.size()),
+                pixels.data()));
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+void append_viewmodel_box(
+    std::vector<ViewmodelVertex>& vertices,
+    const XMFLOAT3& center,
+    const XMFLOAT3& size,
+    const float u0,
+    const float u1,
+    const float v0 = 0.03F,
+    const float v1 = 0.97F)
+{
+    const float hx =
+        size.x * 0.5F;
+
+    const float hy =
+        size.y * 0.5F;
+
+    const float hz =
+        size.z * 0.5F;
+
+    struct BoxFace {
+        XMFLOAT3 normal;
+        XMFLOAT3 tangent;
+        std::array<XMFLOAT3, 4> corners;
+    };
+
+    const std::array<BoxFace, 6> faces{{
+        {
+            { 0.0F, 0.0F, -1.0F },
+            { 1.0F, 0.0F,  0.0F },
+            {{
+                {-hx,-hy,-hz},
+                {-hx, hy,-hz},
+                { hx, hy,-hz},
+                { hx,-hy,-hz}
+            }}
+        },
+        {
+            { 0.0F, 0.0F, 1.0F },
+            {-1.0F, 0.0F, 0.0F },
+            {{
+                { hx,-hy, hz},
+                { hx, hy, hz},
+                {-hx, hy, hz},
+                {-hx,-hy, hz}
+            }}
+        },
+        {
+            {-1.0F, 0.0F, 0.0F },
+            { 0.0F, 0.0F,-1.0F },
+            {{
+                {-hx,-hy, hz},
+                {-hx, hy, hz},
+                {-hx, hy,-hz},
+                {-hx,-hy,-hz}
+            }}
+        },
+        {
+            {1.0F, 0.0F, 0.0F},
+            {0.0F, 0.0F, 1.0F},
+            {{
+                {hx,-hy,-hz},
+                {hx, hy,-hz},
+                {hx, hy, hz},
+                {hx,-hy, hz}
+            }}
+        },
+        {
+            {0.0F, 1.0F, 0.0F},
+            {1.0F, 0.0F, 0.0F},
+            {{
+                {-hx,hy,-hz},
+                {-hx,hy, hz},
+                { hx,hy, hz},
+                { hx,hy,-hz}
+            }}
+        },
+        {
+            {0.0F,-1.0F, 0.0F},
+            {1.0F, 0.0F, 0.0F},
+            {{
+                {-hx,-hy, hz},
+                {-hx,-hy,-hz},
+                { hx,-hy,-hz},
+                { hx,-hy, hz}
+            }}
+        }
+    }};
+
+    const std::array<XMFLOAT2, 4> uv{{
+        {u0, v1},
+        {u0, v0},
+        {u1, v0},
+        {u1, v1}
+    }};
+
+    constexpr int indices[6]{
+        0, 1, 2,
+        0, 2, 3
+    };
+
+    for (const auto& face : faces) {
+        for (const int index : indices) {
+            const auto& c =
+                face.corners[index];
+
+            const auto& t =
+                uv[index];
+
+            vertices.push_back(
+                ViewmodelVertex{
+                    {
+                        center.x + c.x,
+                        center.y + c.y,
+                        center.z + c.z
+                    },
+                    {
+                        face.normal.x,
+                        face.normal.y,
+                        face.normal.z
+                    },
+                    {
+                        face.tangent.x,
+                        face.tangent.y,
+                        face.tangent.z
+                    },
+                    {
+                        t.x,
+                        t.y
+                    }
+                });
+        }
+    }
+}
+
+std::vector<ViewmodelVertex>
+build_basic_pick_mesh()
+{
+    std::vector<ViewmodelVertex> vertices;
+
+    vertices.reserve(36 * 7);
+
+    // --------------------------------------------------------
+    // WOOD HANDLE
+    // Atlas left half = wood.
+    // --------------------------------------------------------
+
+    append_viewmodel_box(
+        vertices,
+        {0.0F, 0.56F, 0.0F},
+        {0.16F, 1.18F, 0.16F},
+        0.025F,
+        0.475F);
+
+    // Slightly thicker grip end.
+    append_viewmodel_box(
+        vertices,
+        {0.0F, -0.055F, 0.0F},
+        {0.20F, 0.18F, 0.20F},
+        0.025F,
+        0.475F);
+
+    // --------------------------------------------------------
+    // FORGED STEEL HEAD
+    // Atlas right half = metal.
+    // --------------------------------------------------------
+
+    append_viewmodel_box(
+        vertices,
+        {0.0F, 1.20F, 0.0F},
+        {1.15F, 0.20F, 0.25F},
+        0.525F,
+        0.975F);
+
+    // Left taper.
+    append_viewmodel_box(
+        vertices,
+        {-0.65F, 1.15F, 0.0F},
+        {0.24F, 0.16F, 0.21F},
+        0.525F,
+        0.975F);
+
+    append_viewmodel_box(
+        vertices,
+        {-0.82F, 1.08F, 0.0F},
+        {0.18F, 0.12F, 0.16F},
+        0.525F,
+        0.975F);
+
+    // Right taper.
+    append_viewmodel_box(
+        vertices,
+        {0.65F, 1.15F, 0.0F},
+        {0.24F, 0.16F, 0.21F},
+        0.525F,
+        0.975F);
+
+    append_viewmodel_box(
+        vertices,
+        {0.82F, 1.08F, 0.0F},
+        {0.18F, 0.12F, 0.16F},
+        0.525F,
+        0.975F);
+
+    return vertices;
 }
 
 int terrain_height(const int x, const int z) noexcept {
@@ -1010,6 +1683,7 @@ private:
             return false;
 
         if (!create_block_atlas()) return false;
+        if (!create_viewmodel_resources()) return false;
         if (!update_streaming(true)) return false;
 
         D3D11_BUFFER_DESC constant_description{};
@@ -1150,6 +1824,300 @@ private:
         }
     }
 
+
+    bool create_viewmodel_texture(
+        const wchar_t* filename,
+        const bool srgb,
+        ComPtr<ID3D11ShaderResourceView>& output) noexcept
+    {
+        std::vector<std::uint8_t> pixels;
+        UINT width = 0;
+        UINT height = 0;
+
+        if (!load_rgba_image(
+                filename,
+                pixels,
+                width,
+                height))
+            return false;
+
+        D3D11_TEXTURE2D_DESC description{};
+        description.Width = width;
+        description.Height = height;
+        description.MipLevels = 0;
+        description.ArraySize = 1;
+
+        description.Format =
+            srgb
+            ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+            : DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        description.SampleDesc.Count = 1;
+        description.Usage = D3D11_USAGE_DEFAULT;
+
+        description.BindFlags =
+            D3D11_BIND_SHADER_RESOURCE
+            |
+            D3D11_BIND_RENDER_TARGET;
+
+        description.MiscFlags =
+            D3D11_RESOURCE_MISC_GENERATE_MIPS;
+
+        ComPtr<ID3D11Texture2D> texture;
+
+        if (FAILED(
+                device_->CreateTexture2D(
+                    &description,
+                    nullptr,
+                    &texture)))
+            return false;
+
+        if (FAILED(
+                device_->CreateShaderResourceView(
+                    texture.Get(),
+                    nullptr,
+                    &output)))
+            return false;
+
+        context_->UpdateSubresource(
+            texture.Get(),
+            0,
+            nullptr,
+            pixels.data(),
+            width * 4U,
+            0);
+
+        context_->GenerateMips(
+            output.Get());
+
+        return true;
+    }
+
+    bool create_viewmodel_resources() noexcept
+    {
+        try {
+            ComPtr<ID3DBlob> vertex_bytecode;
+            ComPtr<ID3DBlob> pixel_bytecode;
+            ComPtr<ID3DBlob> errors;
+
+            UINT flags = 0;
+
+#if defined(_DEBUG)
+            flags =
+                D3DCOMPILE_DEBUG
+                |
+                D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+            if (FAILED(
+                    D3DCompile(
+                        viewmodel_vertex_shader_source,
+                        sizeof(
+                            viewmodel_vertex_shader_source)
+                            - 1,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        "main",
+                        "vs_5_0",
+                        flags,
+                        0,
+                        &vertex_bytecode,
+                        &errors)))
+                return false;
+
+            errors.Reset();
+
+            if (FAILED(
+                    D3DCompile(
+                        viewmodel_pixel_shader_source,
+                        sizeof(
+                            viewmodel_pixel_shader_source)
+                            - 1,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        "main",
+                        "ps_5_0",
+                        flags,
+                        0,
+                        &pixel_bytecode,
+                        &errors)))
+                return false;
+
+            if (FAILED(
+                    device_->CreateVertexShader(
+                        vertex_bytecode->GetBufferPointer(),
+                        vertex_bytecode->GetBufferSize(),
+                        nullptr,
+                        &viewmodel_vertex_shader_)))
+                return false;
+
+            if (FAILED(
+                    device_->CreatePixelShader(
+                        pixel_bytecode->GetBufferPointer(),
+                        pixel_bytecode->GetBufferSize(),
+                        nullptr,
+                        &viewmodel_pixel_shader_)))
+                return false;
+
+            constexpr std::array<
+                D3D11_INPUT_ELEMENT_DESC,
+                4> input_elements{{
+                {
+                    "POSITION",
+                    0,
+                    DXGI_FORMAT_R32G32B32_FLOAT,
+                    0,
+                    0,
+                    D3D11_INPUT_PER_VERTEX_DATA,
+                    0
+                },
+                {
+                    "NORMAL",
+                    0,
+                    DXGI_FORMAT_R32G32B32_FLOAT,
+                    0,
+                    12,
+                    D3D11_INPUT_PER_VERTEX_DATA,
+                    0
+                },
+                {
+                    "TANGENT",
+                    0,
+                    DXGI_FORMAT_R32G32B32_FLOAT,
+                    0,
+                    24,
+                    D3D11_INPUT_PER_VERTEX_DATA,
+                    0
+                },
+                {
+                    "TEXCOORD",
+                    0,
+                    DXGI_FORMAT_R32G32_FLOAT,
+                    0,
+                    36,
+                    D3D11_INPUT_PER_VERTEX_DATA,
+                    0
+                }
+            }};
+
+            if (FAILED(
+                    device_->CreateInputLayout(
+                        input_elements.data(),
+                        static_cast<UINT>(
+                            input_elements.size()),
+                        vertex_bytecode->GetBufferPointer(),
+                        vertex_bytecode->GetBufferSize(),
+                        &viewmodel_input_layout_)))
+                return false;
+
+            const auto vertices =
+                build_basic_pick_mesh();
+
+            if (vertices.empty())
+                return false;
+
+            D3D11_BUFFER_DESC vertex_description{};
+            vertex_description.ByteWidth =
+                static_cast<UINT>(
+                    vertices.size()
+                    * sizeof(ViewmodelVertex));
+
+            vertex_description.Usage =
+                D3D11_USAGE_IMMUTABLE;
+
+            vertex_description.BindFlags =
+                D3D11_BIND_VERTEX_BUFFER;
+
+            D3D11_SUBRESOURCE_DATA vertex_data{};
+            vertex_data.pSysMem =
+                vertices.data();
+
+            if (FAILED(
+                    device_->CreateBuffer(
+                        &vertex_description,
+                        &vertex_data,
+                        &viewmodel_vertex_buffer_)))
+                return false;
+
+            viewmodel_vertex_count_ =
+                static_cast<UINT>(
+                    vertices.size());
+
+            D3D11_BUFFER_DESC constants_description{};
+            constants_description.ByteWidth =
+                sizeof(ViewmodelConstants);
+
+            constants_description.Usage =
+                D3D11_USAGE_DEFAULT;
+
+            constants_description.BindFlags =
+                D3D11_BIND_CONSTANT_BUFFER;
+
+            if (FAILED(
+                    device_->CreateBuffer(
+                        &constants_description,
+                        nullptr,
+                        &viewmodel_constants_)))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"pick_albedo.png",
+                    true,
+                    pick_albedo_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"pick_normal.png",
+                    false,
+                    pick_normal_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"pick_roughness.png",
+                    false,
+                    pick_roughness_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"pick_metallic.png",
+                    false,
+                    pick_metallic_))
+                return false;
+
+            D3D11_SAMPLER_DESC sampler{};
+            sampler.Filter =
+                D3D11_FILTER_ANISOTROPIC;
+
+            sampler.AddressU =
+                D3D11_TEXTURE_ADDRESS_CLAMP;
+
+            sampler.AddressV =
+                D3D11_TEXTURE_ADDRESS_CLAMP;
+
+            sampler.AddressW =
+                D3D11_TEXTURE_ADDRESS_CLAMP;
+
+            sampler.MaxAnisotropy = 8;
+            sampler.MinLOD = 0.0F;
+
+            sampler.MaxLOD =
+                D3D11_FLOAT32_MAX;
+
+            if (FAILED(
+                    device_->CreateSamplerState(
+                        &sampler,
+                        &viewmodel_sampler_)))
+                return false;
+
+            return true;
+        }
+        catch (...) {
+            return false;
+        }
+    }
+
     bool rebuild_mesh() noexcept {
         try {
             const auto vertices = mesh_world(world_);
@@ -1253,6 +2221,26 @@ private:
         if (GetForegroundWindow() != window_) {
             mouse_looking_ = false;
             return;
+        }
+
+        if (player_controls_
+            && player_controls_->select_tool_slot) {
+
+            for (int slot = 0; slot < 4; ++slot) {
+                const int key = '1' + slot;
+                const bool down =
+                    (GetAsyncKeyState(key) & 0x8000) != 0;
+
+                if (down && !tool_slot_key_was_down_[slot]) {
+                    player_controls_->select_tool_slot(
+                        static_cast<std::size_t>(slot));
+
+                    mining_active_ = false;
+                    mining_progress_ = 0.0F;
+                }
+
+                tool_slot_key_was_down_[slot] = down;
+            }
         }
 
         POINT cursor{};
@@ -1433,32 +2421,123 @@ private:
         return XMVector3Normalize(XMVectorSubtract(far_world, near_world));
     }
 
-    bool handle_block_edits(const XMVECTOR ray_direction) noexcept {
-        const bool remove_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        const bool place_down = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+    bool handle_block_edits(
+        const XMVECTOR ray_direction,
+        const float delta_seconds) noexcept {
+
+        const bool remove_down =
+            (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
+        const bool place_down =
+            (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+
         bool changed = false;
 
         try {
-            if (GetForegroundWindow() == window_ && remove_down && !remove_was_down_) {
-                const auto hit = raycast_block(ray_direction);
-                changed = hit.found && world_.set_block(hit.x, hit.y, hit.z, 0);
+            const bool has_tool =
+                !player_controls_
+                || !player_controls_->has_equipped_tool
+                || player_controls_->has_equipped_tool();
+
+            if (GetForegroundWindow() == window_
+                && remove_down
+                && has_tool) {
+                const auto hit =
+                    raycast_block(ray_direction);
+
+                if (hit.found) {
+                    const bool same_target =
+                        mining_active_
+                        && hit.x == mining_x_
+                        && hit.y == mining_y_
+                        && hit.z == mining_z_;
+
+                    if (!same_target) {
+                        mining_active_ = true;
+                        mining_x_ = hit.x;
+                        mining_y_ = hit.y;
+                        mining_z_ = hit.z;
+                        mining_progress_ = 0.0F;
+                    }
+
+                    float performance = 1.0F;
+
+                    if (player_controls_
+                        && player_controls_->tool_performance) {
+                        performance =
+                            std::clamp(
+                                player_controls_->tool_performance(),
+                                0.01F,
+                                1.0F);
+                    }
+
+                    constexpr float base_break_seconds =
+                        0.45F;
+
+                    mining_progress_ +=
+                        (delta_seconds * performance)
+                        / base_break_seconds;
+
+                    if (mining_progress_ >= 1.0F) {
+                        changed =
+                            world_.set_block(
+                                hit.x,
+                                hit.y,
+                                hit.z,
+                                0);
+
+                        if (changed
+                            && player_controls_
+                            && player_controls_->tool_used) {
+                            player_controls_->tool_used();
+                        }
+
+                        mining_active_ = false;
+                        mining_progress_ = 0.0F;
+                    }
+                } else {
+                    mining_active_ = false;
+                    mining_progress_ = 0.0F;
+                }
+            } else {
+                mining_active_ = false;
+                mining_progress_ = 0.0F;
             }
-            if (GetForegroundWindow() == window_ && place_down && !place_was_down_) {
-                const auto hit = raycast_block(ray_direction);
-                if (hit.found && world_.block(
-                        hit.placement_x, hit.placement_y, hit.placement_z) == 0) {
-                    changed = world_.set_block(
-                        hit.placement_x, hit.placement_y, hit.placement_z, 1) || changed;
+
+            if (GetForegroundWindow() == window_
+                && place_down
+                && !place_was_down_) {
+
+                const auto hit =
+                    raycast_block(ray_direction);
+
+                if (hit.found
+                    && world_.block(
+                        hit.placement_x,
+                        hit.placement_y,
+                        hit.placement_z) == 0) {
+
+                    changed =
+                        world_.set_block(
+                            hit.placement_x,
+                            hit.placement_y,
+                            hit.placement_z,
+                            1)
+                        || changed;
                 }
             }
+
         } catch (...) {
             remove_was_down_ = remove_down;
             place_was_down_ = place_down;
+            mining_active_ = false;
+            mining_progress_ = 0.0F;
             return false;
         }
 
         remove_was_down_ = remove_down;
         place_was_down_ = place_down;
+
         return !changed || rebuild_mesh();
     }
 
@@ -1481,7 +2560,8 @@ private:
             static_cast<float>(window_width) / static_cast<float>(window_height),
             0.1F, 250.0F);
         if (!handle_block_edits(
-                pointer_ray(view, projection, forward)))
+                pointer_ray(view, projection, forward),
+                delta_seconds))
             return false;
 
         // One full day currently takes four real minutes.
@@ -2097,6 +3177,237 @@ private:
                 &viewport_);
         }
 
+        // ------------------------------------------------------
+        // 3D PBR FIRST-PERSON VIEWMODEL
+        // ------------------------------------------------------
+
+        if (player_controls_
+            && player_controls_->equipped_tool_name
+            && player_controls_->equipped_tool_name()
+                == "Basic Pick") {
+
+            // Clear world depth only. The pick then depth-tests
+            // against itself while always appearing in front of
+            // world geometry, like a conventional FPS viewmodel.
+            context_->ClearDepthStencilView(
+                depth_view_.Get(),
+                D3D11_CLEAR_DEPTH
+                | D3D11_CLEAR_STENCIL,
+                1.0F,
+                0);
+
+            context_->OMSetRenderTargets(
+                1,
+                targets,
+                depth_view_.Get());
+
+            context_->RSSetViewports(
+                1,
+                &viewport_);
+
+            context_->RSSetState(
+                rasterizer_.Get());
+
+            float swing = 0.0F;
+
+            if (mining_active_) {
+                const float phase =
+                    std::clamp(
+                        mining_progress_,
+                        0.0F,
+                        1.0F);
+
+                swing =
+                    std::sin(
+                        phase * XM_PI);
+            }
+
+            // Camera-space Minecraft-like placement:
+            // hand/pivot is lower-right and the head leans
+            // inward toward the center of the screen.
+            const XMMATRIX scale =
+                XMMatrixScaling(
+                    0.53F,
+                    0.53F,
+                    0.53F);
+
+            const XMMATRIX base_rotation =
+                XMMatrixRotationX(
+                    XMConvertToRadians(-18.0F))
+                *
+                XMMatrixRotationY(
+                    XMConvertToRadians(66.0F))
+                *
+                XMMatrixRotationZ(
+                    XMConvertToRadians(24.0F));
+
+            // Mining is an actual rotation around the held
+            // object, not a HUD translation.
+            const XMMATRIX swing_rotation =
+                XMMatrixRotationX(
+                    XMConvertToRadians(
+                        31.0F * swing))
+                *
+                XMMatrixRotationY(
+                    XMConvertToRadians(
+                        -13.0F * swing))
+                *
+                XMMatrixRotationZ(
+                    XMConvertToRadians(
+                        48.0F * swing));
+
+            const XMMATRIX translation =
+                XMMatrixTranslation(
+                    0.92F
+                        - 0.24F * swing,
+                    -1.02F
+                        + 0.10F * swing,
+                    1.52F
+                        + 0.04F * swing);
+
+            const XMMATRIX model =
+                scale
+                * base_rotation
+                * swing_rotation
+                * translation;
+
+            const XMMATRIX viewmodel_projection =
+                XMMatrixPerspectiveFovLH(
+                    XMConvertToRadians(70.0F),
+                    static_cast<float>(
+                        window_width)
+                    /
+                    static_cast<float>(
+                        window_height),
+                    0.05F,
+                    10.0F);
+
+            const XMMATRIX mvp =
+                model
+                * viewmodel_projection;
+
+            ViewmodelConstants constants{};
+
+            XMStoreFloat4x4(
+                &constants.model_view_projection,
+                XMMatrixTranspose(mvp));
+
+            XMStoreFloat4x4(
+                &constants.model,
+                XMMatrixTranspose(model));
+
+            // Fixed camera-space key light keeps the steel
+            // readable while the PBR maps define its response.
+            constants.light_direction = {
+                -0.45F,
+                -0.70F,
+                0.55F,
+                0.0F
+            };
+
+            constants.light_color = {
+                1.0F,
+                0.95F,
+                0.88F,
+                3.2F
+            };
+
+            context_->UpdateSubresource(
+                viewmodel_constants_.Get(),
+                0,
+                nullptr,
+                &constants,
+                0,
+                0);
+
+            const UINT stride =
+                sizeof(ViewmodelVertex);
+
+            const UINT offset = 0;
+
+            ID3D11Buffer* vertex_buffers[]{
+                viewmodel_vertex_buffer_.Get()
+            };
+
+            context_->IASetInputLayout(
+                viewmodel_input_layout_.Get());
+
+            context_->IASetVertexBuffers(
+                0,
+                1,
+                vertex_buffers,
+                &stride,
+                &offset);
+
+            context_->IASetPrimitiveTopology(
+                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+            context_->VSSetShader(
+                viewmodel_vertex_shader_.Get(),
+                nullptr,
+                0);
+
+            ID3D11Buffer* viewmodel_buffers[]{
+                viewmodel_constants_.Get()
+            };
+
+            context_->VSSetConstantBuffers(
+                3,
+                1,
+                viewmodel_buffers);
+
+            context_->PSSetShader(
+                viewmodel_pixel_shader_.Get(),
+                nullptr,
+                0);
+
+            context_->PSSetConstantBuffers(
+                3,
+                1,
+                viewmodel_buffers);
+
+            ID3D11ShaderResourceView*
+                viewmodel_textures[]{
+                    pick_albedo_.Get(),
+                    pick_normal_.Get(),
+                    pick_roughness_.Get(),
+                    pick_metallic_.Get()
+                };
+
+            context_->PSSetShaderResources(
+                3,
+                4,
+                viewmodel_textures);
+
+            ID3D11SamplerState*
+                viewmodel_samplers[]{
+                    viewmodel_sampler_.Get()
+                };
+
+            context_->PSSetSamplers(
+                3,
+                1,
+                viewmodel_samplers);
+
+            context_->Draw(
+                viewmodel_vertex_count_,
+                0);
+
+            // Avoid carrying pick SRVs into later passes.
+            ID3D11ShaderResourceView*
+                null_viewmodel_textures[]{
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    nullptr
+                };
+
+            context_->PSSetShaderResources(
+                3,
+                4,
+                null_viewmodel_textures);
+        }
+
         return SUCCEEDED(
             swap_chain_->Present(1, 0));
     }
@@ -2141,6 +3452,20 @@ private:
     ComPtr<ID3D11SamplerState> block_sampler_;
     ComPtr<ID3D11SamplerState> shadow_sampler_;
 
+    ComPtr<ID3D11VertexShader> viewmodel_vertex_shader_;
+    ComPtr<ID3D11PixelShader> viewmodel_pixel_shader_;
+    ComPtr<ID3D11InputLayout> viewmodel_input_layout_;
+    ComPtr<ID3D11Buffer> viewmodel_vertex_buffer_;
+    ComPtr<ID3D11Buffer> viewmodel_constants_;
+
+    ComPtr<ID3D11ShaderResourceView> pick_albedo_;
+    ComPtr<ID3D11ShaderResourceView> pick_normal_;
+    ComPtr<ID3D11ShaderResourceView> pick_roughness_;
+    ComPtr<ID3D11ShaderResourceView> pick_metallic_;
+    ComPtr<ID3D11SamplerState> viewmodel_sampler_;
+
+    UINT viewmodel_vertex_count_{0};
+
     D3D11_VIEWPORT viewport_{};
     D3D11_VIEWPORT shadow_viewport_{};
     UINT vertex_count_{0};
@@ -2154,6 +3479,14 @@ private:
     bool mode_key_was_down_{false};
     bool jump_was_down_{false};
     bool fly_mode_{true};
+
+    std::array<bool, 4> tool_slot_key_was_down_{};
+
+    bool mining_active_{false};
+    int mining_x_{0};
+    int mining_y_{0};
+    int mining_z_{0};
+    float mining_progress_{0.0F};
     float vertical_velocity_{0.0F};
 
     // Starts in late morning so the first frame is immediately readable.
