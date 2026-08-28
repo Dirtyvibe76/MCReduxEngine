@@ -15,6 +15,13 @@ window displaying a generated 5x5 streaming window of exposed-face-meshed
 16x256x16 voxel chunks. The window follows the camera as it crosses chunk
 boundaries.
 
+The renderer uses a project-owned 1024x256 realistic material atlas with
+sRGB albedo sampling, generated mipmaps, anisotropic filtering, height-derived
+surface normals, roughness response, per-vertex voxel ambient occlusion,
+directional sunlight, hemispheric ambient light, and distance fog. Grass tops,
+soil, sedimentary stone, and grass/soil
+sides each have their own material tile.
+
 ## Camera controls
 
 - `W`, `A`, `S`, `D`: move horizontally.
@@ -36,8 +43,9 @@ boundaries.
 - `AIEngine`: reusable state-machine foundation.
 - `WorldgenEngine`: deterministic biome, mob, boss, and structure specs.
 - `RenderEngine`: DirectX 11 device, depth buffer, procedural block-texture
-  atlas, streamed chunk mesher, persistent edit overrides, raycast block
-  editing, collision-enabled walk mode, shaders, and fly camera.
+  fallback, realistic PBR material atlas, streamed chunk mesher, persistent edit
+  overrides, raycast block editing, collision-enabled walk mode, shaders, and
+  fly camera.
 - `MCReduxGame`: game-layer integration and player state.
 - `MCReduxEngine`: executable launcher and smoke test.
 

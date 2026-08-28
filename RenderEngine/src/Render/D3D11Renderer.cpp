@@ -9,6 +9,7 @@
 #include <d3dcompiler.h>
 #include <dxgi.h>
 #include <DirectXMath.h>
+#include <wincodec.h>
 
 #include "World/Chunk/Chunk.h"
 
@@ -20,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -27,6 +29,8 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "ole32.lib")
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -38,12 +42,16 @@ constexpr UINT window_height = 720;
 
 struct Vertex final {
     float position[3];
-    float color[3];
+    float normal[3];
     float uv[2];
+    float ambient_occlusion;
 };
 
 struct SceneConstants final {
     XMFLOAT4X4 view_projection;
+    XMFLOAT4 camera_position;
+    XMFLOAT4 sun_direction;
+    XMFLOAT4 fog_color_and_density;
 };
 
 struct Face final {
@@ -70,27 +78,115 @@ constexpr std::array<Face, 6> block_faces{{
 }};
 
 constexpr char vertex_shader_source[] = R"(
-cbuffer SceneConstants : register(b0) { matrix viewProjection; };
-struct VSInput { float3 position : POSITION; float3 color : COLOR; float2 uv : TEXCOORD; };
-struct PSInput { float4 position : SV_POSITION; float3 color : COLOR; float2 uv : TEXCOORD; };
+cbuffer SceneConstants : register(b0) {
+    matrix viewProjection;
+    float4 cameraPosition;
+    float4 sunDirection;
+    float4 fogColorAndDensity;
+};
+struct VSInput {
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+    float2 uv : TEXCOORD;
+    float ambientOcclusion : AO;
+};
+struct PSInput {
+    float4 position : SV_POSITION;
+    float3 worldPosition : POSITION1;
+    float3 normal : NORMAL;
+    float2 uv : TEXCOORD;
+    float ambientOcclusion : AO;
+};
 PSInput main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), viewProjection);
-    output.color = input.color;
+    output.worldPosition = input.position;
+    output.normal = input.normal;
     output.uv = input.uv;
+    output.ambientOcclusion = input.ambientOcclusion;
     return output;
 })";
 
 constexpr char pixel_shader_source[] = R"(
 Texture2D blockAtlas : register(t0);
 SamplerState blockSampler : register(s0);
-struct PSInput { float4 position : SV_POSITION; float3 color : COLOR; float2 uv : TEXCOORD; };
+cbuffer SceneConstants : register(b0) {
+    matrix viewProjection;
+    float4 cameraPosition;
+    float4 sunDirection;
+    float4 fogColorAndDensity;
+};
+struct PSInput {
+    float4 position : SV_POSITION;
+    float3 worldPosition : POSITION1;
+    float3 normal : NORMAL;
+    float2 uv : TEXCOORD;
+    float ambientOcclusion : AO;
+};
 float4 main(PSInput input) : SV_TARGET {
-    return blockAtlas.Sample(blockSampler, input.uv) * float4(input.color, 1.0);
+    const float2 texel = float2(1.0 / 1024.0, 1.0 / 256.0);
+    const float tileStart = floor(input.uv.x * 4.0) * 0.25;
+    const float2 minimumUV = float2(tileStart + texel.x * 0.5, texel.y * 0.5);
+    const float2 maximumUV = float2(tileStart + 0.25 - texel.x * 0.5, 1.0 - texel.y * 0.5);
+    const float3 albedo = blockAtlas.Sample(blockSampler, input.uv).rgb;
+
+    const float heightLeft = dot(blockAtlas.Sample(
+        blockSampler, clamp(input.uv - float2(texel.x, 0), minimumUV, maximumUV)).rgb,
+        float3(0.299, 0.587, 0.114));
+    const float heightRight = dot(blockAtlas.Sample(
+        blockSampler, clamp(input.uv + float2(texel.x, 0), minimumUV, maximumUV)).rgb,
+        float3(0.299, 0.587, 0.114));
+    const float heightDown = dot(blockAtlas.Sample(
+        blockSampler, clamp(input.uv - float2(0, texel.y), minimumUV, maximumUV)).rgb,
+        float3(0.299, 0.587, 0.114));
+    const float heightUp = dot(blockAtlas.Sample(
+        blockSampler, clamp(input.uv + float2(0, texel.y), minimumUV, maximumUV)).rgb,
+        float3(0.299, 0.587, 0.114));
+
+    const float3 baseNormal = normalize(input.normal);
+    const float3 positionDx = ddx(input.worldPosition);
+    const float3 positionDy = ddy(input.worldPosition);
+    const float2 uvDx = ddx(input.uv);
+    const float2 uvDy = ddy(input.uv);
+    const float3 tangentRaw = cross(positionDy, baseNormal) * uvDx.x
+        + cross(baseNormal, positionDx) * uvDy.x;
+    const float3 bitangentRaw = cross(positionDy, baseNormal) * uvDx.y
+        + cross(baseNormal, positionDx) * uvDy.y;
+    const float inverseScale = rsqrt(max(
+        max(dot(tangentRaw, tangentRaw), dot(bitangentRaw, bitangentRaw)), 0.0001));
+    const float3 tangent = tangentRaw * inverseScale;
+    const float3 bitangent = bitangentRaw * inverseScale;
+    const float3 detailNormal = normalize(float3(
+        (heightLeft - heightRight) * 3.0,
+        (heightDown - heightUp) * 3.0, 1.0));
+    const float3 normal = normalize(
+        tangent * detailNormal.x + bitangent * detailNormal.y + baseNormal * detailNormal.z);
+
+    const float3 lightDirection = normalize(-sunDirection.xyz);
+    const float3 viewDirection = normalize(cameraPosition.xyz - input.worldPosition);
+    const float3 halfVector = normalize(lightDirection + viewDirection);
+    const float normalDotLight = saturate(dot(normal, lightDirection));
+    const float normalDotHalf = saturate(dot(normal, halfVector));
+    const float materialIndex = floor(input.uv.x * 4.0);
+    const float roughness = materialIndex == 2.0 ? 0.68 : 0.88;
+    const float specularPower = lerp(96.0, 10.0, roughness);
+    const float specular = pow(normalDotHalf, specularPower)
+        * (1.0 - roughness) * normalDotLight;
+    const float hemisphere = lerp(0.18, 0.34, saturate(normal.y * 0.5 + 0.5));
+    const float shadowedDiffuse = normalDotLight * 1.15;
+    float3 litColor = albedo
+        * (hemisphere + shadowedDiffuse) * input.ambientOcclusion;
+    litColor += specular * float3(1.0, 0.95, 0.86);
+
+    const float distanceToCamera = length(cameraPosition.xyz - input.worldPosition);
+    const float fogAmount = 1.0 - exp(
+        -distanceToCamera * distanceToCamera * fogColorAndDensity.w);
+    litColor = lerp(litColor, fogColorAndDensity.rgb, saturate(fogAmount));
+    return float4(litColor, 1.0);
 }
 )";
 
-constexpr int atlas_tile_size = 16;
+constexpr int atlas_tile_size = 256;
 constexpr int atlas_tile_count = 4;
 constexpr int atlas_width = atlas_tile_size * atlas_tile_count;
 constexpr int atlas_height = atlas_tile_size;
@@ -135,6 +231,51 @@ std::vector<std::uint8_t> build_block_atlas() {
         }
     }
     return pixels;
+}
+
+std::wstring block_atlas_path() {
+    std::array<wchar_t, 32768> executable_path{};
+    const DWORD length = GetModuleFileNameW(
+        nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+    if (length == 0 || length >= executable_path.size()) return {};
+    std::wstring path(executable_path.data(), length);
+    const auto separator = path.find_last_of(L"\\/");
+    if (separator == std::wstring::npos) return {};
+    path.resize(separator + 1);
+    path += L"assets\\textures\\block_albedo.png";
+    return path;
+}
+
+bool load_block_atlas(
+    std::vector<std::uint8_t>& pixels, UINT& width, UINT& height) noexcept {
+    try {
+        const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(com_result) && com_result != RPC_E_CHANGED_MODE) return false;
+
+        ComPtr<IWICImagingFactory> factory;
+        ComPtr<IWICBitmapDecoder> decoder;
+        ComPtr<IWICBitmapFrameDecode> frame;
+        ComPtr<IWICFormatConverter> converter;
+        const auto path = block_atlas_path();
+        if (path.empty()
+            || FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))
+            || FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
+                WICDecodeMetadataCacheOnLoad, &decoder))
+            || FAILED(decoder->GetFrame(0, &frame))
+            || FAILED(factory->CreateFormatConverter(&converter))
+            || FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))
+            || FAILED(converter->GetSize(&width, &height))
+            || width != static_cast<UINT>(atlas_width)
+            || height != static_cast<UINT>(atlas_height)) return false;
+
+        pixels.resize(static_cast<std::size_t>(width) * height * 4U);
+        return SUCCEEDED(converter->CopyPixels(
+            nullptr, width * 4U, static_cast<UINT>(pixels.size()), pixels.data()));
+    } catch (...) {
+        return false;
+    }
 }
 
 int terrain_height(const int x, const int z) noexcept {
@@ -246,10 +387,6 @@ private:
     std::map<std::tuple<int, int, int>, mcr::world::Chunk::BlockId> overrides_;
 };
 
-std::array<float, 3> block_color(const mcr::world::Chunk::BlockId) noexcept {
-    return {1.0F, 1.0F, 1.0F};
-}
-
 int texture_tile(const mcr::world::Chunk::BlockId block, const Face& face) noexcept {
     if (block == 1) {
         if (face.neighbor_y > 0) return 0;
@@ -272,6 +409,48 @@ std::array<float, 2> texture_uv(const int tile, const unsigned corner) noexcept 
     };
 }
 
+float vertex_ambient_occlusion(
+    const ChunkWorld& world, const int world_x, const int y, const int world_z,
+    const Face& face, const std::array<float, 3>& corner) noexcept {
+    std::array<int, 3> first_axis{};
+    std::array<int, 3> second_axis{};
+    int first_sign = 1;
+    int second_sign = 1;
+    if (face.neighbor_x != 0) {
+        first_axis = {0, 1, 0};
+        second_axis = {0, 0, 1};
+        first_sign = corner[1] > 0.5F ? 1 : -1;
+        second_sign = corner[2] > 0.5F ? 1 : -1;
+    } else if (face.neighbor_y != 0) {
+        first_axis = {1, 0, 0};
+        second_axis = {0, 0, 1};
+        first_sign = corner[0] > 0.5F ? 1 : -1;
+        second_sign = corner[2] > 0.5F ? 1 : -1;
+    } else {
+        first_axis = {1, 0, 0};
+        second_axis = {0, 1, 0};
+        first_sign = corner[0] > 0.5F ? 1 : -1;
+        second_sign = corner[1] > 0.5F ? 1 : -1;
+    }
+
+    const auto occupied = [&](const int first, const int second) {
+        return world.block(
+            world_x + face.neighbor_x + first_axis[0] * first
+                + second_axis[0] * second,
+            y + face.neighbor_y + first_axis[1] * first
+                + second_axis[1] * second,
+            world_z + face.neighbor_z + first_axis[2] * first
+                + second_axis[2] * second) != 0;
+    };
+    const bool first_side = occupied(first_sign, 0);
+    const bool second_side = occupied(0, second_sign);
+    const bool diagonal = occupied(first_sign, second_sign);
+    if (first_side && second_side) return 0.55F;
+    return 1.0F - 0.14F * static_cast<float>(
+        static_cast<int>(first_side) + static_cast<int>(second_side)
+        + static_cast<int>(diagonal));
+}
+
 std::vector<Vertex> mesh_world(const ChunkWorld& world) {
     std::vector<Vertex> vertices;
     vertices.reserve(world.loaded_count() * 12000);
@@ -287,10 +466,6 @@ std::vector<Vertex> mesh_world(const ChunkWorld& world) {
                     if (block == 0) continue;
                     const int world_x = base_x + x;
                     const int world_z = base_z + z;
-                    const auto base_color = block_color(block);
-                    const float variation = 0.92F
-                        + static_cast<float>((world_x * 17 + y * 7 + world_z * 13) & 7) * 0.012F;
-
                     for (const auto& face : block_faces) {
                         if (world.block(world_x + face.neighbor_x, y + face.neighbor_y,
                                         world_z + face.neighbor_z) != 0) continue;
@@ -298,14 +473,17 @@ std::vector<Vertex> mesh_world(const ChunkWorld& world) {
                         for (const unsigned corner_index : triangle_indices) {
                             const auto& corner = face.corners[corner_index];
                             const auto uv = texture_uv(tile, corner_index);
+                            const float ambient_occlusion = vertex_ambient_occlusion(
+                                world, world_x, y, world_z, face, corner);
                             vertices.push_back({
                                 {static_cast<float>(world_x) + corner[0],
                                  static_cast<float>(y) + corner[1],
                                  static_cast<float>(world_z) + corner[2]},
-                                {base_color[0] * face.shade * variation,
-                                 base_color[1] * face.shade * variation,
-                                 base_color[2] * face.shade * variation},
-                                {uv[0], uv[1]}
+                                {static_cast<float>(face.neighbor_x),
+                                 static_cast<float>(face.neighbor_y),
+                                 static_cast<float>(face.neighbor_z)},
+                                {uv[0], uv[1]},
+                                ambient_occlusion
                             });
                         }
                     }
@@ -441,12 +619,14 @@ private:
                                                  &pixel_shader_)))
             return false;
 
-        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 3> input_elements{{
+        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 4> input_elements{{
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
              D3D11_INPUT_PER_VERTEX_DATA, 0},
-            {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
              D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
+             D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"AO", 0, DXGI_FORMAT_R32_FLOAT, 0, 32,
              D3D11_INPUT_PER_VERTEX_DATA, 0},
         }};
         if (FAILED(device_->CreateInputLayout(input_elements.data(),
@@ -484,30 +664,38 @@ private:
 
     bool create_block_atlas() noexcept {
         try {
-            const auto pixels = build_block_atlas();
+            std::vector<std::uint8_t> pixels;
+            UINT texture_width = atlas_width;
+            UINT texture_height = atlas_height;
+            if (!load_block_atlas(pixels, texture_width, texture_height)) {
+                pixels = build_block_atlas();
+            }
             D3D11_TEXTURE2D_DESC texture_description{};
-            texture_description.Width = atlas_width;
-            texture_description.Height = atlas_height;
-            texture_description.MipLevels = 1;
+            texture_description.Width = texture_width;
+            texture_description.Height = texture_height;
+            texture_description.MipLevels = 0;
             texture_description.ArraySize = 1;
-            texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
             texture_description.SampleDesc.Count = 1;
-            texture_description.Usage = D3D11_USAGE_IMMUTABLE;
-            texture_description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            D3D11_SUBRESOURCE_DATA texture_data{};
-            texture_data.pSysMem = pixels.data();
-            texture_data.SysMemPitch = atlas_width * 4;
+            texture_description.Usage = D3D11_USAGE_DEFAULT;
+            texture_description.BindFlags =
+                D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            texture_description.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
             ComPtr<ID3D11Texture2D> texture;
             if (FAILED(device_->CreateTexture2D(
-                    &texture_description, &texture_data, &texture))
+                    &texture_description, nullptr, &texture))
                 || FAILED(device_->CreateShaderResourceView(
                     texture.Get(), nullptr, &block_atlas_))) return false;
+            context_->UpdateSubresource(
+                texture.Get(), 0, nullptr, pixels.data(), texture_width * 4U, 0);
+            context_->GenerateMips(block_atlas_.Get());
 
             D3D11_SAMPLER_DESC sampler_description{};
-            sampler_description.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+            sampler_description.Filter = D3D11_FILTER_ANISOTROPIC;
             sampler_description.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
             sampler_description.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
             sampler_description.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampler_description.MaxAnisotropy = 8;
             sampler_description.MaxLOD = D3D11_FLOAT32_MAX;
             return SUCCEEDED(device_->CreateSamplerState(
                 &sampler_description, &block_sampler_));
@@ -796,9 +984,13 @@ private:
         SceneConstants constants{};
         XMStoreFloat4x4(&constants.view_projection,
                         XMMatrixTranspose(view * projection));
+        constants.camera_position = {
+            camera_position_.x, camera_position_.y, camera_position_.z, 1.0F};
+        constants.sun_direction = {0.45F, -0.82F, 0.34F, 0.0F};
+        constants.fog_color_and_density = {0.36F, 0.55F, 0.72F, 0.00035F};
         context_->UpdateSubresource(scene_constants_.Get(), 0, nullptr, &constants, 0, 0);
 
-        constexpr float clear_color[4]{0.025F, 0.035F, 0.065F, 1.0F};
+        constexpr float clear_color[4]{0.36F, 0.55F, 0.72F, 1.0F};
         context_->ClearRenderTargetView(render_target_.Get(), clear_color);
         context_->ClearDepthStencilView(
             depth_view_.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0F, 0);
@@ -819,6 +1011,7 @@ private:
         context_->VSSetShader(vertex_shader_.Get(), nullptr, 0);
         context_->VSSetConstantBuffers(0, 1, constants_buffer);
         context_->PSSetShader(pixel_shader_.Get(), nullptr, 0);
+        context_->PSSetConstantBuffers(0, 1, constants_buffer);
         context_->PSSetShaderResources(0, 1, textures);
         context_->PSSetSamplers(0, 1, samplers);
         context_->Draw(vertex_count_, 0);
@@ -889,7 +1082,7 @@ bool D3D11Renderer::run_visual_demo() noexcept {
 void D3D11Renderer::shutdown() noexcept { ready_ = false; }
 
 std::string_view D3D11Renderer::backend_name() const noexcept {
-    return "DirectX 11 chunk renderer";
+    return "DirectX 11 PBR chunk renderer";
 }
 
 } // namespace mcr::render

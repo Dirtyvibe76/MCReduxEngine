@@ -12,7 +12,7 @@ int main() {
         if (!result.passed) return 1;
 
 #ifdef _WIN32
-        std::cout << "Opening the streamed MC-Redux voxel world...\n"
+        std::cout << "Opening the streamed MC-Redux PBR voxel world...\n"
                   << "Controls: W/A/S/D move, Q/E descend/ascend, hold right mouse to look.\n"
                   << "Left click removes the block under the pointer.\n"
                   << "Middle click places a block under the pointer.\n"

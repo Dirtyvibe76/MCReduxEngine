@@ -179,6 +179,15 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="assets\textures\block_albedo.png" />
+  </ItemGroup>
+  <Target Name="CopyRenderAssets" AfterTargets="Build">
+    <MakeDir Directories="$(TargetDir)assets\textures" />
+    <Copy SourceFiles="$(ProjectDir)assets\textures\block_albedo.png"
+          DestinationFolder="$(TargetDir)assets\textures"
+          SkipUnchangedFiles="true" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

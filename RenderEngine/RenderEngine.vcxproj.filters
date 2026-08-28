@@ -19,6 +19,9 @@
     <Filter Include="src\Render">
       <UniqueIdentifier>{C671179C-74EF-5AB6-B70D-5807440702B0}</UniqueIdentifier>
     </Filter>
+    <Filter Include="assets\textures">
+      <UniqueIdentifier>{8F230C82-75CD-4DD1-8F17-9715264736E1}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -41,5 +44,10 @@
     <ClCompile Include="src\Render\D3D11Renderer.cpp">
       <Filter>src\Render</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="assets\textures\block_albedo.png">
+      <Filter>assets\textures</Filter>
+    </Content>
   </ItemGroup>
 </Project>
