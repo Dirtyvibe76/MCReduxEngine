@@ -56,6 +56,8 @@ struct SceneConstants final {
     XMFLOAT4 sun_direction;
     XMFLOAT4 fog_color_and_density;
     XMFLOAT4 cascade_splits;
+    XMFLOAT4 sun_color_and_intensity;
+    XMFLOAT4 sky_ambient_and_intensity;
 };
 
 struct Face final {
@@ -89,6 +91,8 @@ cbuffer SceneConstants : register(b0) {
     float4 sunDirection;
     float4 fogColorAndDensity;
     float4 cascadeSplits;
+    float4 sunColorAndIntensity;
+    float4 skyAmbientAndIntensity;
 };
 struct VSInput {
     float3 position : POSITION;
@@ -127,6 +131,8 @@ cbuffer SceneConstants : register(b0) {
     float4 sunDirection;
     float4 fogColorAndDensity;
     float4 cascadeSplits;
+    float4 sunColorAndIntensity;
+    float4 skyAmbientAndIntensity;
 };
 struct PSInput {
     float4 position : SV_POSITION;
@@ -247,8 +253,11 @@ float4 main(PSInput input) : SV_TARGET {
     const float specularPower = lerp(96.0, 10.0, roughness);
     const float specular = pow(normalDotHalf, specularPower)
         * (1.0 - roughness) * normalDotLight;
-    const float hemisphere =
+    const float hemisphereBase =
         lerp(0.16, 0.30, saturate(normal.y * 0.5 + 0.5));
+
+    const float hemisphere =
+        hemisphereBase * skyAmbientAndIntensity.w;
 
     const float distanceToCamera =
         length(cameraPosition.xyz - input.worldPosition);
@@ -267,15 +276,23 @@ float4 main(PSInput input) : SV_TARGET {
         lerp(0.28, 1.0, rawShadow);
 
     const float directDiffuse =
-        normalDotLight * 1.38 * sunVisibility;
+        normalDotLight
+        * 1.38
+        * sunVisibility
+        * sunColorAndIntensity.w;
 
-    float3 litColor = albedo
-        * (hemisphere + directDiffuse)
+    float3 litColor =
+        albedo
+        * (
+            skyAmbientAndIntensity.rgb * hemisphere
+            + sunColorAndIntensity.rgb * directDiffuse
+          )
         * input.ambientOcclusion;
 
     litColor += specular
         * sunVisibility
-        * float3(1.0, 0.95, 0.86);
+        * sunColorAndIntensity.w
+        * sunColorAndIntensity.rgb;
 
     const float fogAmount = 1.0 - exp(
         -distanceToCamera * distanceToCamera * fogColorAndDensity.w);
@@ -295,6 +312,131 @@ float4 main(PSInput input) : SV_TARGET {
     return float4(saturate(srgbColor), 1.0);
 }
 )";
+
+
+constexpr char sky_vertex_shader_source[] = R"(
+struct VSOutput {
+    float4 position : SV_POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VSOutput main(uint vertexId : SV_VertexID)
+{
+    VSOutput output;
+
+    float2 position =
+        vertexId == 0 ? float2(-1.0, -1.0) :
+        vertexId == 1 ? float2(-1.0,  3.0) :
+                        float2( 3.0, -1.0);
+
+    output.position = float4(position, 0.0, 1.0);
+    output.uv = position * float2(0.5, -0.5) + 0.5;
+
+    return output;
+}
+)";
+
+constexpr char sky_pixel_shader_source[] = R"(
+cbuffer SkyConstants : register(b1) {
+    matrix inverseViewProjection;
+    float4 cameraPositionSky;
+    float4 sunDirectionSky;
+    float4 horizonColor;
+    float4 zenithColor;
+    float4 sunColorSky;
+};
+
+struct PSInput {
+    float4 position : SV_POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+float4 main(PSInput input) : SV_TARGET
+{
+    float2 ndc;
+    ndc.x = input.uv.x * 2.0 - 1.0;
+    ndc.y = 1.0 - input.uv.y * 2.0;
+
+    float4 farPoint =
+        mul(float4(ndc, 1.0, 1.0), inverseViewProjection);
+
+    farPoint.xyz /= farPoint.w;
+
+    const float3 viewDirection =
+        normalize(farPoint.xyz - cameraPositionSky.xyz);
+
+    const float vertical =
+        saturate(viewDirection.y * 0.5 + 0.5);
+
+    // Horizon stays brighter while zenith becomes richer blue.
+    const float gradient =
+        pow(saturate(vertical), 0.55);
+
+    float3 skyColor =
+        lerp(horizonColor.rgb, zenithColor.rgb, gradient);
+
+    // Warm the horizon opposite/around low sun elevations.
+    const float horizonBand =
+        pow(1.0 - saturate(abs(viewDirection.y)), 5.0);
+
+    skyColor +=
+        sunColorSky.rgb
+        * horizonBand
+        * sunColorSky.w
+        * 0.12;
+
+    const float3 directionToSun =
+        normalize(-sunDirectionSky.xyz);
+
+    const float sunDot =
+        saturate(dot(viewDirection, directionToSun));
+
+    // Soft atmospheric glow.
+    const float sunGlow =
+        pow(sunDot, 256.0);
+
+    // Compact visible solar disk.
+    const float sunDisk =
+        smoothstep(0.99935, 0.99975, sunDot);
+
+    skyColor +=
+        sunColorSky.rgb
+        * (
+            sunGlow * 1.1
+            + sunDisk * 4.0
+          )
+        * sunColorSky.w;
+
+    // Back buffer is non-sRGB: encode sky exactly once.
+    const float3 linearColor =
+        max(skyColor, 0.0);
+
+    const float3 srgbLow =
+        linearColor * 12.92;
+
+    const float3 srgbHigh =
+        1.055
+        * pow(max(linearColor, 0.000001), 1.0 / 2.4)
+        - 0.055;
+
+    const float3 srgbColor =
+        lerp(
+            srgbHigh,
+            srgbLow,
+            1.0 - step(0.0031308, linearColor));
+
+    return float4(saturate(srgbColor), 1.0);
+}
+)";
+
+struct SkyConstants final {
+    XMFLOAT4X4 inverse_view_projection;
+    XMFLOAT4 camera_position;
+    XMFLOAT4 sun_direction;
+    XMFLOAT4 horizon_color;
+    XMFLOAT4 zenith_color;
+    XMFLOAT4 sun_color;
+};
 
 constexpr int atlas_tile_size = 256;
 constexpr int atlas_tile_count = 4;
@@ -649,7 +791,7 @@ private:
         window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = window_proc;
         window_class.hInstance = instance_;
-        window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
         window_class.lpszClassName = L"MCReduxD3D11Window";
         if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
             return false;
@@ -762,6 +904,8 @@ private:
 
         ComPtr<ID3DBlob> vertex_bytecode;
         ComPtr<ID3DBlob> pixel_bytecode;
+        ComPtr<ID3DBlob> sky_vertex_bytecode;
+        ComPtr<ID3DBlob> sky_pixel_bytecode;
         ComPtr<ID3DBlob> errors;
         UINT compile_flags = 0;
 #if defined(_DEBUG)
@@ -780,6 +924,36 @@ private:
             || FAILED(device_->CreatePixelShader(pixel_bytecode->GetBufferPointer(),
                                                  pixel_bytecode->GetBufferSize(), nullptr,
                                                  &pixel_shader_)))
+            return false;
+
+        if (FAILED(D3DCompile(
+                sky_vertex_shader_source,
+                sizeof(sky_vertex_shader_source) - 1,
+                nullptr, nullptr, nullptr,
+                "main", "vs_5_0",
+                compile_flags, 0,
+                &sky_vertex_bytecode,
+                &errors))
+            || FAILED(D3DCompile(
+                sky_pixel_shader_source,
+                sizeof(sky_pixel_shader_source) - 1,
+                nullptr, nullptr, nullptr,
+                "main", "ps_5_0",
+                compile_flags, 0,
+                &sky_pixel_bytecode,
+                &errors)))
+            return false;
+
+        if (FAILED(device_->CreateVertexShader(
+                sky_vertex_bytecode->GetBufferPointer(),
+                sky_vertex_bytecode->GetBufferSize(),
+                nullptr,
+                &sky_vertex_shader_))
+            || FAILED(device_->CreatePixelShader(
+                sky_pixel_bytecode->GetBufferPointer(),
+                sky_pixel_bytecode->GetBufferSize(),
+                nullptr,
+                &sky_pixel_shader_)))
             return false;
 
         constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 4> input_elements{{
@@ -807,6 +981,18 @@ private:
         constant_description.Usage = D3D11_USAGE_DEFAULT;
         constant_description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         if (FAILED(device_->CreateBuffer(&constant_description, nullptr, &scene_constants_)))
+            return false;
+
+        D3D11_BUFFER_DESC sky_constant_description{};
+        sky_constant_description.ByteWidth = sizeof(SkyConstants);
+        sky_constant_description.Usage = D3D11_USAGE_DEFAULT;
+        sky_constant_description.BindFlags =
+            D3D11_BIND_CONSTANT_BUFFER;
+
+        if (FAILED(device_->CreateBuffer(
+                &sky_constant_description,
+                nullptr,
+                &sky_constants_)))
             return false;
 
         D3D11_RASTERIZER_DESC rasterizer_description{};
@@ -1196,9 +1382,107 @@ private:
                 pointer_ray(view, projection, forward)))
             return false;
 
-        const XMVECTOR sun_direction =
+        // One full day currently takes four real minutes.
+        // Keep the value wrapped to avoid unbounded accumulation.
+        time_of_day_ += delta_seconds / 240.0F;
+        if (time_of_day_ >= 1.0F)
+            time_of_day_ -= 1.0F;
+
+        const float solar_angle =
+            time_of_day_ * XM_2PI;
+
+        // Y is positive above the horizon.
+        const float sun_elevation =
+            std::sin(solar_angle);
+
+        const float sun_horizontal =
+            std::cos(solar_angle);
+
+        const XMVECTOR direction_to_sun =
             XMVector3Normalize(
-                XMVectorSet(0.45F, -0.82F, 0.34F, 0.0F));
+                XMVectorSet(
+                    sun_horizontal * 0.78F,
+                    sun_elevation,
+                    sun_horizontal * 0.62F,
+                    0.0F));
+
+        // Existing lighting convention stores direction FROM sun.
+        const XMVECTOR sun_direction =
+            XMVectorNegate(direction_to_sun);
+
+        const float daylight =
+            std::clamp(
+                (sun_elevation + 0.08F) / 0.38F,
+                0.0F,
+                1.0F);
+
+        const float sunset =
+            std::clamp(
+                1.0F - std::abs(sun_elevation) / 0.35F,
+                0.0F,
+                1.0F)
+            * daylight;
+
+        const XMFLOAT3 noon_sun{
+            1.00F, 0.96F, 0.86F};
+
+        const XMFLOAT3 sunset_sun{
+            1.00F, 0.46F, 0.18F};
+
+        const XMFLOAT3 sun_color{
+            noon_sun.x * (1.0F - sunset)
+                + sunset_sun.x * sunset,
+            noon_sun.y * (1.0F - sunset)
+                + sunset_sun.y * sunset,
+            noon_sun.z * (1.0F - sunset)
+                + sunset_sun.z * sunset
+        };
+
+        const float sun_intensity =
+            0.08F + daylight * 0.92F;
+
+        const XMFLOAT3 night_horizon{
+            0.012F, 0.018F, 0.045F};
+
+        const XMFLOAT3 day_horizon{
+            0.38F, 0.60F, 0.82F};
+
+        const XMFLOAT3 sunset_horizon{
+            0.78F, 0.31F, 0.14F};
+
+        XMFLOAT3 horizon_color{
+            night_horizon.x
+                + (day_horizon.x - night_horizon.x) * daylight,
+            night_horizon.y
+                + (day_horizon.y - night_horizon.y) * daylight,
+            night_horizon.z
+                + (day_horizon.z - night_horizon.z) * daylight
+        };
+
+        horizon_color.x =
+            horizon_color.x * (1.0F - sunset)
+            + sunset_horizon.x * sunset;
+        horizon_color.y =
+            horizon_color.y * (1.0F - sunset)
+            + sunset_horizon.y * sunset;
+        horizon_color.z =
+            horizon_color.z * (1.0F - sunset)
+            + sunset_horizon.z * sunset;
+
+        const XMFLOAT3 night_zenith{
+            0.004F, 0.008F, 0.025F};
+
+        const XMFLOAT3 day_zenith{
+            0.10F, 0.32F, 0.62F};
+
+        const XMFLOAT3 zenith_color{
+            night_zenith.x
+                + (day_zenith.x - night_zenith.x) * daylight,
+            night_zenith.y
+                + (day_zenith.y - night_zenith.y) * daylight,
+            night_zenith.z
+                + (day_zenith.z - night_zenith.z) * daylight
+        };
 
         constexpr std::array<float, shadow_cascade_count>
             cascade_ranges{24.0F, 52.0F, 96.0F};
@@ -1273,14 +1557,45 @@ private:
             1.0F
         };
 
-        constants.sun_direction =
-            {0.45F, -0.82F, 0.34F, 0.0F};
+        XMFLOAT3 sun_direction_float{};
+        XMStoreFloat3(
+            &sun_direction_float,
+            sun_direction);
 
-        constants.fog_color_and_density =
-            {0.36F, 0.55F, 0.72F, 0.00008F};
+        constants.sun_direction = {
+            sun_direction_float.x,
+            sun_direction_float.y,
+            sun_direction_float.z,
+            0.0F
+        };
+
+        // Fog follows the lower sky instead of staying fixed blue.
+        constants.fog_color_and_density = {
+            horizon_color.x,
+            horizon_color.y,
+            horizon_color.z,
+            0.00008F
+        };
 
         constants.cascade_splits =
             {24.0F, 52.0F, 96.0F, 0.0F};
+
+        constants.sun_color_and_intensity = {
+            sun_color.x,
+            sun_color.y,
+            sun_color.z,
+            sun_intensity
+        };
+
+        const float ambient_intensity =
+            0.18F + daylight * 0.82F;
+
+        constants.sky_ambient_and_intensity = {
+            horizon_color.x * 0.42F + zenith_color.x * 0.58F,
+            horizon_color.y * 0.42F + zenith_color.y * 0.58F,
+            horizon_color.z * 0.42F + zenith_color.z * 0.58F,
+            ambient_intensity
+        };
 
         constexpr UINT stride = sizeof(Vertex);
         constexpr UINT offset = 0;
@@ -1332,6 +1647,7 @@ private:
             nullptr,
             0);
 
+        if (daylight > 0.01F) {
         for (UINT cascade = 0;
              cascade < shadow_cascade_count;
              ++cascade) {
@@ -1362,6 +1678,7 @@ private:
 
             context_->Draw(vertex_count_, 0);
         }
+        }
 
         // ------------------------------------------------------
         // MAIN CAMERA / PBR PASS
@@ -1380,15 +1697,124 @@ private:
             0);
 
         constexpr float clear_color[4]{
-            0.36F, 0.55F, 0.72F, 1.0F
+            0.0F, 0.0F, 0.0F, 1.0F
         };
-        context_->ClearRenderTargetView(render_target_.Get(), clear_color);
+
+        context_->ClearRenderTargetView(
+            render_target_.Get(),
+            clear_color);
+
         context_->ClearDepthStencilView(
-            depth_view_.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0F, 0);
-        ID3D11RenderTargetView* targets[]{render_target_.Get()};
-        context_->OMSetRenderTargets(1, targets, depth_view_.Get());
-        context_->RSSetViewports(1, &viewport_);
-        context_->RSSetState(rasterizer_.Get());
+            depth_view_.Get(),
+            D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL,
+            1.0F,
+            0);
+
+        ID3D11RenderTargetView* targets[]{
+            render_target_.Get()
+        };
+
+        context_->OMSetRenderTargets(
+            1,
+            targets,
+            depth_view_.Get());
+
+        context_->RSSetViewports(
+            1,
+            &viewport_);
+
+        context_->RSSetState(
+            rasterizer_.Get());
+
+        // ------------------------------------------------------
+        // PROCEDURAL SKY PASS
+        // ------------------------------------------------------
+
+        SkyConstants sky_constants{};
+
+        const XMMATRIX inverse_view_projection =
+            XMMatrixInverse(nullptr, view * projection);
+
+        XMStoreFloat4x4(
+            &sky_constants.inverse_view_projection,
+            XMMatrixTranspose(inverse_view_projection));
+
+        sky_constants.camera_position = {
+            camera_position_.x,
+            camera_position_.y,
+            camera_position_.z,
+            1.0F
+        };
+
+        sky_constants.sun_direction =
+            constants.sun_direction;
+
+        sky_constants.horizon_color = {
+            horizon_color.x,
+            horizon_color.y,
+            horizon_color.z,
+            1.0F
+        };
+
+        sky_constants.zenith_color = {
+            zenith_color.x,
+            zenith_color.y,
+            zenith_color.z,
+            1.0F
+        };
+
+        sky_constants.sun_color = {
+            sun_color.x,
+            sun_color.y,
+            sun_color.z,
+            sun_intensity
+        };
+
+        context_->UpdateSubresource(
+            sky_constants_.Get(),
+            0,
+            nullptr,
+            &sky_constants,
+            0,
+            0);
+
+        ID3D11Buffer* sky_buffers[]{
+            sky_constants_.Get()
+        };
+
+        context_->IASetInputLayout(nullptr);
+        context_->IASetVertexBuffers(
+            0, 0, nullptr, nullptr, nullptr);
+        context_->IASetPrimitiveTopology(
+            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        context_->VSSetShader(
+            sky_vertex_shader_.Get(),
+            nullptr,
+            0);
+
+        context_->PSSetShader(
+            sky_pixel_shader_.Get(),
+            nullptr,
+            0);
+
+        context_->PSSetConstantBuffers(
+            1,
+            1,
+            sky_buffers);
+
+        context_->Draw(3, 0);
+
+        // Reset the depth buffer after the background-only sky.
+        context_->ClearDepthStencilView(
+            depth_view_.Get(),
+            D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL,
+            1.0F,
+            0);
+
+        // ------------------------------------------------------
+        // TERRAIN PBR PASS
+        // ------------------------------------------------------
 
         ID3D11ShaderResourceView* textures[]{
             block_atlas_.Get(),
@@ -1461,9 +1887,12 @@ private:
 
     ComPtr<ID3D11VertexShader> vertex_shader_;
     ComPtr<ID3D11PixelShader> pixel_shader_;
+    ComPtr<ID3D11VertexShader> sky_vertex_shader_;
+    ComPtr<ID3D11PixelShader> sky_pixel_shader_;
     ComPtr<ID3D11InputLayout> input_layout_;
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> scene_constants_;
+    ComPtr<ID3D11Buffer> sky_constants_;
     ComPtr<ID3D11RasterizerState> rasterizer_;
     ComPtr<ID3D11RasterizerState> shadow_rasterizer_;
 
@@ -1485,6 +1914,10 @@ private:
     bool jump_was_down_{false};
     bool fly_mode_{true};
     float vertical_velocity_{0.0F};
+
+    // Starts in late morning so the first frame is immediately readable.
+    float time_of_day_{0.22F};
+
     bool stream_center_valid_{false};
     int stream_center_x_{0};
     int stream_center_z_{0};

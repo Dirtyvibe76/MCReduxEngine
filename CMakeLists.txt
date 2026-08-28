@@ -50,3 +50,14 @@ target_link_libraries(MCReduxEngine PRIVATE MCReduxGame)
 
 enable_testing()
 add_test(NAME engine_smoke_test COMMAND MCReduxEngine)
+
+# Deploy renderer assets beside the executable so runtime loading works
+# for Visual Studio/CMake Debug and Release builds.
+add_custom_command(TARGET MCReduxEngine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/block_albedo.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/block_albedo.png"
+    COMMENT "Copying MC-Redux runtime assets"
+)
