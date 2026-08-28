@@ -12,8 +12,9 @@ int main() {
         if (!result.passed) return 1;
 
 #ifdef _WIN32
-        std::cout << "Opening the first MC-Redux voxel window...\n"
-                  << "Press Esc or close the window to exit.\n";
+        std::cout << "Opening the first generated MC-Redux voxel chunk...\n"
+                  << "Controls: W/A/S/D move, Q/E descend/ascend, hold right mouse to look.\n"
+                  << "Hold Shift to move faster. Press Esc or close the window to exit.\n";
         mcr::render::D3D11Renderer renderer;
         if (!renderer.run_visual_demo()) {
             std::cerr << "DirectX 11 visual demo failed to initialize.\n";
