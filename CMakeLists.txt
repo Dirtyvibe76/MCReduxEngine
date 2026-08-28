@@ -79,5 +79,21 @@ add_custom_command(TARGET MCReduxEngine POST_BUILD
         "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/pick_metallic.png"
         "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/pick_metallic.png"
 
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/arm_albedo.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/arm_albedo.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/arm_normal.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/arm_normal.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/arm_roughness.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/arm_roughness.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/RenderEngine/assets/textures/arm_metallic.png"
+        "$<TARGET_FILE_DIR:MCReduxEngine>/assets/textures/arm_metallic.png"
+
     COMMENT "Copying MC-Redux runtime assets"
 )

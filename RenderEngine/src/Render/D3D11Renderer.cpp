@@ -1147,6 +1147,71 @@ void append_viewmodel_box(
     }
 }
 
+
+std::vector<ViewmodelVertex>
+build_right_arm_mesh()
+{
+    std::vector<ViewmodelVertex> vertices;
+
+    vertices.reserve(36 * 7);
+
+    // Upper sleeve continues offscreen toward the body.
+    append_viewmodel_box(
+        vertices,
+        {0.48F, -1.08F, 0.12F},
+        {0.40F, 0.92F, 0.40F},
+        0.025F,
+        0.475F);
+
+    // Sleeve / forearm.
+    append_viewmodel_box(
+        vertices,
+        {0.28F, -0.50F, 0.08F},
+        {0.31F, 0.78F, 0.31F},
+        0.025F,
+        0.475F);
+
+    // Wrist.
+    append_viewmodel_box(
+        vertices,
+        {0.10F, -0.08F, 0.03F},
+        {0.25F, 0.23F, 0.26F},
+        0.525F,
+        0.975F);
+
+    // Palm.
+    append_viewmodel_box(
+        vertices,
+        {0.00F, 0.13F, 0.00F},
+        {0.24F, 0.27F, 0.25F},
+        0.525F,
+        0.975F);
+
+    // Fingers curling around the pick handle.
+    append_viewmodel_box(
+        vertices,
+        {-0.08F, 0.28F, -0.08F},
+        {0.10F, 0.18F, 0.11F},
+        0.525F,
+        0.975F);
+
+    append_viewmodel_box(
+        vertices,
+        {0.02F, 0.30F, -0.08F},
+        {0.10F, 0.19F, 0.11F},
+        0.525F,
+        0.975F);
+
+    append_viewmodel_box(
+        vertices,
+        {0.12F, 0.27F, -0.07F},
+        {0.09F, 0.17F, 0.11F},
+        0.525F,
+        0.975F);
+
+    return vertices;
+}
+
 std::vector<ViewmodelVertex>
 build_basic_pick_mesh()
 {
@@ -2018,6 +2083,12 @@ private:
             if (vertices.empty())
                 return false;
 
+            const auto arm_vertices =
+                build_right_arm_mesh();
+
+            if (arm_vertices.empty())
+                return false;
+
             D3D11_BUFFER_DESC vertex_description{};
             vertex_description.ByteWidth =
                 static_cast<UINT>(
@@ -2044,6 +2115,33 @@ private:
             viewmodel_vertex_count_ =
                 static_cast<UINT>(
                     vertices.size());
+
+            D3D11_BUFFER_DESC arm_vertex_description{};
+            arm_vertex_description.ByteWidth =
+                static_cast<UINT>(
+                    arm_vertices.size()
+                    * sizeof(ViewmodelVertex));
+
+            arm_vertex_description.Usage =
+                D3D11_USAGE_IMMUTABLE;
+
+            arm_vertex_description.BindFlags =
+                D3D11_BIND_VERTEX_BUFFER;
+
+            D3D11_SUBRESOURCE_DATA arm_vertex_data{};
+            arm_vertex_data.pSysMem =
+                arm_vertices.data();
+
+            if (FAILED(
+                    device_->CreateBuffer(
+                        &arm_vertex_description,
+                        &arm_vertex_data,
+                        &viewmodel_arm_vertex_buffer_)))
+                return false;
+
+            viewmodel_arm_vertex_count_ =
+                static_cast<UINT>(
+                    arm_vertices.size());
 
             D3D11_BUFFER_DESC constants_description{};
             constants_description.ByteWidth =
@@ -2084,6 +2182,30 @@ private:
                     L"pick_metallic.png",
                     false,
                     pick_metallic_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"arm_albedo.png",
+                    true,
+                    arm_albedo_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"arm_normal.png",
+                    false,
+                    arm_normal_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"arm_roughness.png",
+                    false,
+                    arm_roughness_))
+                return false;
+
+            if (!create_viewmodel_texture(
+                    L"arm_metallic.png",
+                    false,
+                    arm_metallic_))
                 return false;
 
             D3D11_SAMPLER_DESC sampler{};
@@ -2566,7 +2688,8 @@ private:
 
         // One full day currently takes four real minutes.
         // Keep the value wrapped to avoid unbounded accumulation.
-        time_of_day_ += delta_seconds / 240.0F;
+        // One complete day/night cycle = 30 real minutes.
+        time_of_day_ += delta_seconds / 1800.0F;
         if (time_of_day_ >= 1.0F)
             time_of_day_ -= 1.0F;
 
@@ -3239,7 +3362,7 @@ private:
                     XMConvertToRadians(66.0F))
                 *
                 XMMatrixRotationZ(
-                    XMConvertToRadians(24.0F));
+                    XMConvertToRadians(0.0F));
 
             // Mining is an actual rotation around the held
             // object, not a HUD translation.
@@ -3389,6 +3512,111 @@ private:
                 1,
                 viewmodel_samplers);
 
+            // --------------------------------------------------
+            // RIGHT HAND / FOREARM
+            // Shares the same mining swing pivot as the pick.
+            // --------------------------------------------------
+
+            const XMMATRIX arm_local =
+                XMMatrixRotationX(
+                    XMConvertToRadians(2.0F))
+                *
+                XMMatrixRotationZ(
+                    XMConvertToRadians(-18.0F))
+                *
+                XMMatrixTranslation(
+                    -0.02F,
+                    0.02F,
+                    -0.02F);
+
+            const XMMATRIX arm_model =
+                arm_local
+                * scale
+                * base_rotation
+                * swing_rotation
+                * translation;
+
+            const XMMATRIX arm_mvp =
+                arm_model
+                * viewmodel_projection;
+
+            ViewmodelConstants arm_constants{};
+
+            XMStoreFloat4x4(
+                &arm_constants.model_view_projection,
+                XMMatrixTranspose(arm_mvp));
+
+            XMStoreFloat4x4(
+                &arm_constants.model,
+                XMMatrixTranspose(arm_model));
+
+            arm_constants.light_direction =
+                constants.light_direction;
+
+            arm_constants.light_color = {
+                1.0F,
+                0.95F,
+                0.90F,
+                1.45F
+            };
+
+            context_->UpdateSubresource(
+                viewmodel_constants_.Get(),
+                0,
+                nullptr,
+                &arm_constants,
+                0,
+                0);
+
+            ID3D11ShaderResourceView*
+                arm_textures[]{
+                    arm_albedo_.Get(),
+                    arm_normal_.Get(),
+                    arm_roughness_.Get(),
+                    arm_metallic_.Get()
+                };
+
+            context_->PSSetShaderResources(
+                3,
+                4,
+                arm_textures);
+
+            ID3D11Buffer* arm_buffers[]{
+                viewmodel_arm_vertex_buffer_.Get()
+            };
+
+            context_->IASetVertexBuffers(
+                0,
+                1,
+                arm_buffers,
+                &stride,
+                &offset);
+
+            context_->Draw(
+                viewmodel_arm_vertex_count_,
+                0);
+
+            // Restore the pick constants and buffer.
+            context_->UpdateSubresource(
+                viewmodel_constants_.Get(),
+                0,
+                nullptr,
+                &constants,
+                0,
+                0);
+
+            context_->IASetVertexBuffers(
+                0,
+                1,
+                vertex_buffers,
+                &stride,
+                &offset);
+
+            context_->PSSetShaderResources(
+                3,
+                4,
+                viewmodel_textures);
+
             context_->Draw(
                 viewmodel_vertex_count_,
                 0);
@@ -3456,15 +3684,22 @@ private:
     ComPtr<ID3D11PixelShader> viewmodel_pixel_shader_;
     ComPtr<ID3D11InputLayout> viewmodel_input_layout_;
     ComPtr<ID3D11Buffer> viewmodel_vertex_buffer_;
+    ComPtr<ID3D11Buffer> viewmodel_arm_vertex_buffer_;
     ComPtr<ID3D11Buffer> viewmodel_constants_;
 
     ComPtr<ID3D11ShaderResourceView> pick_albedo_;
     ComPtr<ID3D11ShaderResourceView> pick_normal_;
     ComPtr<ID3D11ShaderResourceView> pick_roughness_;
     ComPtr<ID3D11ShaderResourceView> pick_metallic_;
+
+    ComPtr<ID3D11ShaderResourceView> arm_albedo_;
+    ComPtr<ID3D11ShaderResourceView> arm_normal_;
+    ComPtr<ID3D11ShaderResourceView> arm_roughness_;
+    ComPtr<ID3D11ShaderResourceView> arm_metallic_;
     ComPtr<ID3D11SamplerState> viewmodel_sampler_;
 
     UINT viewmodel_vertex_count_{0};
+    UINT viewmodel_arm_vertex_count_{0};
 
     D3D11_VIEWPORT viewport_{};
     D3D11_VIEWPORT shadow_viewport_{};
