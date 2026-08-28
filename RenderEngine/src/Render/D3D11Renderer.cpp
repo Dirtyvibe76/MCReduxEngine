@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -38,6 +39,7 @@ constexpr UINT window_height = 720;
 struct Vertex final {
     float position[3];
     float color[3];
+    float uv[2];
 };
 
 struct SceneConstants final {
@@ -69,19 +71,71 @@ constexpr std::array<Face, 6> block_faces{{
 
 constexpr char vertex_shader_source[] = R"(
 cbuffer SceneConstants : register(b0) { matrix viewProjection; };
-struct VSInput { float3 position : POSITION; float3 color : COLOR; };
-struct PSInput { float4 position : SV_POSITION; float3 color : COLOR; };
+struct VSInput { float3 position : POSITION; float3 color : COLOR; float2 uv : TEXCOORD; };
+struct PSInput { float4 position : SV_POSITION; float3 color : COLOR; float2 uv : TEXCOORD; };
 PSInput main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), viewProjection);
     output.color = input.color;
+    output.uv = input.uv;
     return output;
 })";
 
 constexpr char pixel_shader_source[] = R"(
-struct PSInput { float4 position : SV_POSITION; float3 color : COLOR; };
-float4 main(PSInput input) : SV_TARGET { return float4(input.color, 1.0); }
+Texture2D blockAtlas : register(t0);
+SamplerState blockSampler : register(s0);
+struct PSInput { float4 position : SV_POSITION; float3 color : COLOR; float2 uv : TEXCOORD; };
+float4 main(PSInput input) : SV_TARGET {
+    return blockAtlas.Sample(blockSampler, input.uv) * float4(input.color, 1.0);
+}
 )";
+
+constexpr int atlas_tile_size = 16;
+constexpr int atlas_tile_count = 4;
+constexpr int atlas_width = atlas_tile_size * atlas_tile_count;
+constexpr int atlas_height = atlas_tile_size;
+
+std::vector<std::uint8_t> build_block_atlas() {
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(atlas_width) * atlas_height * 4U);
+    for (int tile = 0; tile < atlas_tile_count; ++tile) {
+        for (int y = 0; y < atlas_tile_size; ++y) {
+            for (int x = 0; x < atlas_tile_size; ++x) {
+                const int detail = (x * 37 + y * 71 + tile * 19) & 15;
+                int red = 0;
+                int green = 0;
+                int blue = 0;
+                if (tile == 0) {
+                    red = 42 + detail;
+                    green = 145 + detail * 2;
+                    blue = 55 + detail;
+                } else if (tile == 1) {
+                    red = 105 + detail * 2;
+                    green = 66 + detail;
+                    blue = 34 + detail / 2;
+                } else if (tile == 2) {
+                    red = green = blue = 92 + detail * 3;
+                } else if (y < 5 || (y < 8 && ((x + y) % 5 == 0))) {
+                    red = 38 + detail;
+                    green = 132 + detail * 2;
+                    blue = 49 + detail;
+                } else {
+                    red = 101 + detail * 2;
+                    green = 63 + detail;
+                    blue = 32 + detail / 2;
+                }
+
+                const std::size_t pixel = (static_cast<std::size_t>(y) * atlas_width
+                    + static_cast<std::size_t>(tile * atlas_tile_size + x)) * 4U;
+                pixels[pixel] = static_cast<std::uint8_t>(std::clamp(red, 0, 255));
+                pixels[pixel + 1] = static_cast<std::uint8_t>(std::clamp(green, 0, 255));
+                pixels[pixel + 2] = static_cast<std::uint8_t>(std::clamp(blue, 0, 255));
+                pixels[pixel + 3] = 255;
+            }
+        }
+    }
+    return pixels;
+}
 
 int terrain_height(const int x, const int z) noexcept {
     const float rolling = std::sin(static_cast<float>(x) * 0.48F) * 1.5F
@@ -192,12 +246,30 @@ private:
     std::map<std::tuple<int, int, int>, mcr::world::Chunk::BlockId> overrides_;
 };
 
-std::array<float, 3> block_color(const mcr::world::Chunk::BlockId block) noexcept {
-    switch (block) {
-    case 1: return {0.24F, 0.72F, 0.34F};
-    case 2: return {0.48F, 0.30F, 0.16F};
-    default: return {0.43F, 0.46F, 0.50F};
+std::array<float, 3> block_color(const mcr::world::Chunk::BlockId) noexcept {
+    return {1.0F, 1.0F, 1.0F};
+}
+
+int texture_tile(const mcr::world::Chunk::BlockId block, const Face& face) noexcept {
+    if (block == 1) {
+        if (face.neighbor_y > 0) return 0;
+        if (face.neighbor_y < 0) return 1;
+        return 3;
     }
+    return block == 2 ? 1 : 2;
+}
+
+std::array<float, 2> texture_uv(const int tile, const unsigned corner) noexcept {
+    constexpr std::array<std::array<float, 2>, 4> corners{{
+        {{0.0F, 1.0F}}, {{0.0F, 0.0F}}, {{1.0F, 0.0F}}, {{1.0F, 1.0F}}
+    }};
+    const float inset = 0.5F;
+    const float usable = static_cast<float>(atlas_tile_size) - 1.0F;
+    return {
+        (static_cast<float>(tile * atlas_tile_size) + inset
+            + corners[corner][0] * usable) / static_cast<float>(atlas_width),
+        (inset + corners[corner][1] * usable) / static_cast<float>(atlas_height)
+    };
 }
 
 std::vector<Vertex> mesh_world(const ChunkWorld& world) {
@@ -222,15 +294,18 @@ std::vector<Vertex> mesh_world(const ChunkWorld& world) {
                     for (const auto& face : block_faces) {
                         if (world.block(world_x + face.neighbor_x, y + face.neighbor_y,
                                         world_z + face.neighbor_z) != 0) continue;
+                        const int tile = texture_tile(block, face);
                         for (const unsigned corner_index : triangle_indices) {
                             const auto& corner = face.corners[corner_index];
+                            const auto uv = texture_uv(tile, corner_index);
                             vertices.push_back({
                                 {static_cast<float>(world_x) + corner[0],
                                  static_cast<float>(y) + corner[1],
                                  static_cast<float>(world_z) + corner[2]},
                                 {base_color[0] * face.shade * variation,
                                  base_color[1] * face.shade * variation,
-                                 base_color[2] * face.shade * variation}
+                                 base_color[2] * face.shade * variation},
+                                {uv[0], uv[1]}
                             });
                         }
                     }
@@ -295,7 +370,7 @@ private:
         RECT rectangle{0, 0, static_cast<LONG>(window_width), static_cast<LONG>(window_height)};
         AdjustWindowRect(&rectangle, style, FALSE);
         window_ = CreateWindowExW(0, window_class.lpszClassName,
-            L"MC-Redux - Streamed Voxel World (DirectX 11)", style,
+            L"MC-Redux - Streamed Voxel World [FLY] (DirectX 11)", style,
             CW_USEDEFAULT, CW_USEDEFAULT, rectangle.right - rectangle.left,
             rectangle.bottom - rectangle.top, nullptr, nullptr, instance_, nullptr);
         return window_ != nullptr;
@@ -366,10 +441,12 @@ private:
                                                  &pixel_shader_)))
             return false;
 
-        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 2> input_elements{{
+        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 3> input_elements{{
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
              D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+             D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
              D3D11_INPUT_PER_VERTEX_DATA, 0},
         }};
         if (FAILED(device_->CreateInputLayout(input_elements.data(),
@@ -379,6 +456,7 @@ private:
                                               &input_layout_)))
             return false;
 
+        if (!create_block_atlas()) return false;
         if (!update_streaming(true)) return false;
 
         D3D11_BUFFER_DESC constant_description{};
@@ -402,6 +480,40 @@ private:
         viewport_.MinDepth = 0.0F;
         viewport_.MaxDepth = 1.0F;
         return true;
+    }
+
+    bool create_block_atlas() noexcept {
+        try {
+            const auto pixels = build_block_atlas();
+            D3D11_TEXTURE2D_DESC texture_description{};
+            texture_description.Width = atlas_width;
+            texture_description.Height = atlas_height;
+            texture_description.MipLevels = 1;
+            texture_description.ArraySize = 1;
+            texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            texture_description.SampleDesc.Count = 1;
+            texture_description.Usage = D3D11_USAGE_IMMUTABLE;
+            texture_description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA texture_data{};
+            texture_data.pSysMem = pixels.data();
+            texture_data.SysMemPitch = atlas_width * 4;
+            ComPtr<ID3D11Texture2D> texture;
+            if (FAILED(device_->CreateTexture2D(
+                    &texture_description, &texture_data, &texture))
+                || FAILED(device_->CreateShaderResourceView(
+                    texture.Get(), nullptr, &block_atlas_))) return false;
+
+            D3D11_SAMPLER_DESC sampler_description{};
+            sampler_description.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+            sampler_description.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampler_description.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampler_description.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampler_description.MaxLOD = D3D11_FLOAT32_MAX;
+            return SUCCEEDED(device_->CreateSamplerState(
+                &sampler_description, &block_sampler_));
+        } catch (...) {
+            return false;
+        }
     }
 
     bool rebuild_mesh() noexcept {
@@ -444,8 +556,70 @@ private:
         return true;
     }
 
+    [[nodiscard]] bool player_collides(const XMFLOAT3& eye_position) const noexcept {
+        constexpr float radius = 0.30F;
+        constexpr float eye_height = 1.62F;
+        constexpr float player_height = 1.80F;
+        constexpr float epsilon = 0.001F;
+        const int minimum_x = static_cast<int>(std::floor(eye_position.x - radius));
+        const int maximum_x = static_cast<int>(std::floor(eye_position.x + radius - epsilon));
+        const int minimum_y = static_cast<int>(std::floor(eye_position.y - eye_height));
+        const int maximum_y = static_cast<int>(
+            std::floor(eye_position.y + player_height - eye_height - epsilon));
+        const int minimum_z = static_cast<int>(std::floor(eye_position.z - radius));
+        const int maximum_z = static_cast<int>(std::floor(eye_position.z + radius - epsilon));
+
+        for (int y = minimum_y; y <= maximum_y; ++y) {
+            for (int z = minimum_z; z <= maximum_z; ++z) {
+                for (int x = minimum_x; x <= maximum_x; ++x) {
+                    if (world_.block(x, y, z) != 0) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool on_ground() const noexcept {
+        auto probe = camera_position_;
+        probe.y -= 0.06F;
+        return player_collides(probe);
+    }
+
+    bool move_with_collision(const XMFLOAT3 displacement) noexcept {
+        const float largest = std::max({
+            std::abs(displacement.x), std::abs(displacement.y), std::abs(displacement.z)});
+        const int steps = std::max(1, static_cast<int>(std::ceil(largest / 0.20F)));
+        const XMFLOAT3 step{
+            displacement.x / static_cast<float>(steps),
+            displacement.y / static_cast<float>(steps),
+            displacement.z / static_cast<float>(steps)};
+        bool vertical_collision = false;
+
+        for (int index = 0; index < steps; ++index) {
+            auto candidate = camera_position_;
+            candidate.x += step.x;
+            if (!player_collides(candidate)) camera_position_.x = candidate.x;
+
+            candidate = camera_position_;
+            candidate.z += step.z;
+            if (!player_collides(candidate)) camera_position_.z = candidate.z;
+
+            candidate = camera_position_;
+            candidate.y += step.y;
+            if (!player_collides(candidate)) {
+                camera_position_.y = candidate.y;
+            } else if (step.y != 0.0F) {
+                vertical_collision = true;
+            }
+        }
+        return vertical_collision;
+    }
+
     void update_camera(const float delta_seconds) noexcept {
-        if (GetForegroundWindow() != window_) return;
+        if (GetForegroundWindow() != window_) {
+            mouse_looking_ = false;
+            return;
+        }
 
         POINT cursor{};
         GetCursorPos(&cursor);
@@ -462,6 +636,16 @@ private:
             mouse_looking_ = false;
         }
 
+        const bool mode_key_down = (GetAsyncKeyState('F') & 0x8000) != 0;
+        if (mode_key_down && !mode_key_was_down_) {
+            fly_mode_ = !fly_mode_;
+            vertical_velocity_ = 0.0F;
+            SetWindowTextW(window_, fly_mode_
+                ? L"MC-Redux - Streamed Voxel World [FLY] (DirectX 11)"
+                : L"MC-Redux - Streamed Voxel World [WALK] (DirectX 11)");
+        }
+        mode_key_was_down_ = mode_key_down;
+
         const XMVECTOR flat_forward = XMVector3Normalize(
             XMVectorSet(std::sin(yaw_), 0.0F, std::cos(yaw_), 0.0F));
         const XMVECTOR right = XMVector3Normalize(
@@ -471,17 +655,37 @@ private:
         if (GetAsyncKeyState('S') & 0x8000) movement = XMVectorSubtract(movement, flat_forward);
         if (GetAsyncKeyState('D') & 0x8000) movement = XMVectorAdd(movement, right);
         if (GetAsyncKeyState('A') & 0x8000) movement = XMVectorSubtract(movement, right);
-        if (GetAsyncKeyState('E') & 0x8000)
+        if (fly_mode_ && (GetAsyncKeyState('E') & 0x8000))
             movement = XMVectorAdd(movement, XMVectorSet(0, 1, 0, 0));
-        if (GetAsyncKeyState('Q') & 0x8000)
+        if (fly_mode_ && (GetAsyncKeyState('Q') & 0x8000))
             movement = XMVectorSubtract(movement, XMVectorSet(0, 1, 0, 0));
 
-        if (XMVectorGetX(XMVector3LengthSq(movement)) > 0.0F) {
-            const float speed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 18.0F : 7.0F;
-            const XMVECTOR position = XMLoadFloat3(&camera_position_);
-            XMStoreFloat3(&camera_position_, XMVectorAdd(position,
-                XMVectorScale(XMVector3Normalize(movement), speed * delta_seconds)));
+        if (fly_mode_) {
+            if (XMVectorGetX(XMVector3LengthSq(movement)) > 0.0F) {
+                const float speed =
+                    (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 18.0F : 7.0F;
+                const XMVECTOR position = XMLoadFloat3(&camera_position_);
+                XMStoreFloat3(&camera_position_, XMVectorAdd(position,
+                    XMVectorScale(
+                        XMVector3Normalize(movement), speed * delta_seconds)));
+            }
+            return;
         }
+
+        XMFLOAT3 displacement{};
+        if (XMVectorGetX(XMVector3LengthSq(movement)) > 0.0F) {
+            const float speed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 8.0F : 4.5F;
+            XMStoreFloat3(&displacement,
+                XMVectorScale(XMVector3Normalize(movement), speed * delta_seconds));
+            displacement.y = 0.0F;
+        }
+
+        const bool jump_down = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+        if (jump_down && !jump_was_down_ && on_ground()) vertical_velocity_ = 8.0F;
+        jump_was_down_ = jump_down;
+        vertical_velocity_ = std::max(vertical_velocity_ - 24.0F * delta_seconds, -30.0F);
+        displacement.y = vertical_velocity_ * delta_seconds;
+        if (move_with_collision(displacement)) vertical_velocity_ = 0.0F;
     }
 
     struct BlockHit final {
@@ -607,12 +811,16 @@ private:
         constexpr UINT offset = 0;
         ID3D11Buffer* buffers[]{vertex_buffer_.Get()};
         ID3D11Buffer* constants_buffer[]{scene_constants_.Get()};
+        ID3D11ShaderResourceView* textures[]{block_atlas_.Get()};
+        ID3D11SamplerState* samplers[]{block_sampler_.Get()};
         context_->IASetInputLayout(input_layout_.Get());
         context_->IASetVertexBuffers(0, 1, buffers, &stride, &offset);
         context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context_->VSSetShader(vertex_shader_.Get(), nullptr, 0);
         context_->VSSetConstantBuffers(0, 1, constants_buffer);
         context_->PSSetShader(pixel_shader_.Get(), nullptr, 0);
+        context_->PSSetShaderResources(0, 1, textures);
+        context_->PSSetSamplers(0, 1, samplers);
         context_->Draw(vertex_count_, 0);
         return SUCCEEDED(swap_chain_->Present(1, 0));
     }
@@ -637,6 +845,8 @@ private:
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> scene_constants_;
     ComPtr<ID3D11RasterizerState> rasterizer_;
+    ComPtr<ID3D11ShaderResourceView> block_atlas_;
+    ComPtr<ID3D11SamplerState> block_sampler_;
     D3D11_VIEWPORT viewport_{};
     UINT vertex_count_{0};
     ChunkWorld world_;
@@ -646,6 +856,10 @@ private:
     bool mouse_looking_{false};
     bool remove_was_down_{false};
     bool place_was_down_{false};
+    bool mode_key_was_down_{false};
+    bool jump_was_down_{false};
+    bool fly_mode_{true};
+    float vertical_velocity_{0.0F};
     bool stream_center_valid_{false};
     int stream_center_x_{0};
     int stream_center_z_{0};

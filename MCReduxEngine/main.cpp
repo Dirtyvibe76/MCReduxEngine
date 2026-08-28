@@ -16,6 +16,7 @@ int main() {
                   << "Controls: W/A/S/D move, Q/E descend/ascend, hold right mouse to look.\n"
                   << "Left click removes the block under the pointer.\n"
                   << "Middle click places a block under the pointer.\n"
+                  << "Press F for walk/fly mode. Space jumps while walking.\n"
                   << "Hold Shift to move faster. Press Esc or close the window to exit.\n";
         mcr::render::D3D11Renderer renderer;
         if (!renderer.run_visual_demo()) {

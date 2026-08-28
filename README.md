@@ -22,6 +22,8 @@ boundaries.
 - Hold the right mouse button and drag: look around.
 - Left click: remove the block under the mouse pointer.
 - Middle click: place a grass block against the face under the mouse pointer.
+- `F`: toggle collision-enabled walk mode and free-fly mode.
+- `Space`: jump while in walk mode.
 - Hold `Shift`: move faster.
 - `Esc`: exit.
 
@@ -33,8 +35,9 @@ boundaries.
 - `CombatEngine`: hit/hurt boxes, frame data, and damage packets.
 - `AIEngine`: reusable state-machine foundation.
 - `WorldgenEngine`: deterministic biome, mob, boss, and structure specs.
-- `RenderEngine`: DirectX 11 device, depth buffer, streamed chunk mesher,
-  persistent edit overrides, raycast block editing, shaders, and fly camera.
+- `RenderEngine`: DirectX 11 device, depth buffer, procedural block-texture
+  atlas, streamed chunk mesher, persistent edit overrides, raycast block
+  editing, collision-enabled walk mode, shaders, and fly camera.
 - `MCReduxGame`: game-layer integration and player state.
 - `MCReduxEngine`: executable launcher and smoke test.
 
@@ -42,4 +45,5 @@ boundaries.
 
 This is an engine foundation, not the completed game. The large design document
 contains mechanics that must be implemented and tested incrementally. The next
-milestone is texture-atlas rendering and player collision with the voxel world.
+milestone is separating renderer/world responsibilities and adding asynchronous
+chunk generation so streaming does not pause the render loop.
