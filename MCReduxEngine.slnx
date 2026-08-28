@@ -3,13 +3,13 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="AIEngine/AIEngine.vcxproj" />
-  <Project Path="CombatEngine/CombatEngine.vcxproj" />
-  <Project Path="CoreEngine/CoreEngine.vcxproj" />
-  <Project Path="MCReduxEngine/MCReduxEngine.vcxproj" />
-  <Project Path="MCReduxGame/MCReduxGame.vcxproj" />
-  <Project Path="PhysicsEngine/PhysicsEngine.vcxproj" />
-  <Project Path="RenderEngine/RenderEngine.vcxproj" />
-  <Project Path="WorldEngine/WorldEngine.vcxproj" />
-  <Project Path="WorldgenEngine/WorldgenEngine.vcxproj" />
+  <Project Path="AIEngine/AIEngine.vcxproj" Id="05a1c68b-c535-40d0-babb-8d449f0ca54f" />
+  <Project Path="CombatEngine/CombatEngine.vcxproj" Id="ba6f0ce9-27c5-4957-8ccb-549d6638ea8d" />
+  <Project Path="CoreEngine/CoreEngine.vcxproj" Id="8ff71101-c358-4915-ac52-b5117d0ffc51" />
+  <Project Path="MCReduxEngine/MCReduxEngine.vcxproj" Id="f0266f85-40a5-4366-bb8a-c63562cc3e92" />
+  <Project Path="MCReduxGame/MCReduxGame.vcxproj" Id="b2a0c7f9-7a30-42b7-9fee-2bb60cd1de43" />
+  <Project Path="PhysicsEngine/PhysicsEngine.vcxproj" Id="b4d6266b-30e0-46a5-b50c-eca6fd4a71c6" />
+  <Project Path="RenderEngine/RenderEngine.vcxproj" Id="cfc2cc5f-22e0-4215-86a8-ecbe24ff96be" />
+  <Project Path="WorldEngine/WorldEngine.vcxproj" Id="85820ccd-7677-4c44-89c0-7f39edd58694" />
+  <Project Path="WorldgenEngine/WorldgenEngine.vcxproj" Id="97209dfa-c51f-47b2-bd89-83c6f6516644" />
 </Solution>
