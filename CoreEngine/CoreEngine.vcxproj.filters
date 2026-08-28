@@ -1,0 +1,105 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{36619E6C-5EBB-5485-A709-F1F780570444}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{5EF660C3-0B3C-53F7-9C1B-02117E55BB12}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{C1AEEEA9-CF69-597A-8710-B54C7B215918}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Core">
+      <UniqueIdentifier>{5C7018FB-0B75-5E3F-9E10-CC60B3A0787F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Core\ECS">
+      <UniqueIdentifier>{8A64BE63-D0FF-5002-A89D-B344A1E86E09}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Core\EventBus">
+      <UniqueIdentifier>{4B38C48D-F881-5F48-B707-0DC00E0B3C86}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Core\Math">
+      <UniqueIdentifier>{37600557-51DB-5155-8604-56FF8B8AE35C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Core\Time">
+      <UniqueIdentifier>{641BCED3-206A-55C9-97DD-14A32534F817}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{191C4BE2-67FE-5EAC-8A92-8F984A614807}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Core">
+      <UniqueIdentifier>{47C87FF0-76B5-5246-907F-3860F016442D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Core\ECS">
+      <UniqueIdentifier>{31D997A2-EE81-51C0-B747-5EC79866B616}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Core\EventBus">
+      <UniqueIdentifier>{9B77A01A-6331-557E-83F2-0F733B4D889D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Core\Math">
+      <UniqueIdentifier>{F80C3DF3-68BD-547D-9F97-9A2B5E1083EB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Core\Time">
+      <UniqueIdentifier>{6A32CE48-C741-5D97-8690-A7FF17DBA20B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\Core\ECS\Component.h">
+      <Filter>include\Core\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\ECS\Entity.h">
+      <Filter>include\Core\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\ECS\Registry.h">
+      <Filter>include\Core\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\ECS\System.h">
+      <Filter>include\Core\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\EventBus\Event.h">
+      <Filter>include\Core\EventBus</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\EventBus\EventBus.h">
+      <Filter>include\Core\EventBus</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\Math\Noise.h">
+      <Filter>include\Core\Math</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\Math\Vec3.h">
+      <Filter>include\Core\Math</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Core\Time\GameLoop.h">
+      <Filter>include\Core\Time</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Core\ECS\Entity.cpp">
+      <Filter>src\Core\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\ECS\System.cpp">
+      <Filter>src\Core\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\EventBus\EventBus.cpp">
+      <Filter>src\Core\EventBus</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\Math\Noise.cpp">
+      <Filter>src\Core\Math</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\Time\GameLoop.cpp">
+      <Filter>src\Core\Time</Filter>
+    </ClCompile>
+    <ClCompile Include="CoreEngine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

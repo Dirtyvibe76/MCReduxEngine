@@ -1,0 +1,15 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="AIEngine/AIEngine.vcxproj" />
+  <Project Path="CombatEngine/CombatEngine.vcxproj" />
+  <Project Path="CoreEngine/CoreEngine.vcxproj" />
+  <Project Path="MCReduxEngine/MCReduxEngine.vcxproj" />
+  <Project Path="MCReduxGame/MCReduxGame.vcxproj" />
+  <Project Path="PhysicsEngine/PhysicsEngine.vcxproj" />
+  <Project Path="RenderEngine/RenderEngine.vcxproj" />
+  <Project Path="WorldEngine/WorldEngine.vcxproj" />
+  <Project Path="WorldgenEngine/WorldgenEngine.vcxproj" />
+</Solution>

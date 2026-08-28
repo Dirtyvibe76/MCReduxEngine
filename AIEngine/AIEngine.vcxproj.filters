@@ -1,0 +1,51 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{DB2C7E99-340D-57B5-BEB7-F06885FF83E0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{64CFE392-51C4-59AC-9A01-23A241F6FBC8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{A17600BA-BDD5-5737-8011-4A76C3B306F5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\AI">
+      <UniqueIdentifier>{4B537700-B4A9-5189-A6C5-38116EBA8F72}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{8F8B5F7F-C08E-51E9-BABB-389AC07A4E0B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\AI">
+      <UniqueIdentifier>{7FF51547-34A2-5C05-B0F3-6DF91648B41A}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\AI\AIContext.h">
+      <Filter>include\AI</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\AIState.h">
+      <Filter>include\AI</Filter>
+    </ClInclude>
+    <ClInclude Include="include\AI\StateMachine.h">
+      <Filter>include\AI</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\AI\StateMachine.cpp">
+      <Filter>src\AI</Filter>
+    </ClCompile>
+    <ClCompile Include="AIEngine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

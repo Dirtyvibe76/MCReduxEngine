@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{02D12546-CD9E-5F4B-99CF-0D5870A374D8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{9F8382BC-FB9B-53FF-B12D-634AC345BFB4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{52662E82-FEA2-526A-B7B9-8F863B034C8C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Combat">
+      <UniqueIdentifier>{1A3AED36-DA9F-5BEF-9EFB-537AFBA0DA75}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{C04E65D3-004E-5C26-BB52-879AD94353EB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Combat">
+      <UniqueIdentifier>{ABB84D2C-011C-59C6-B058-D1AC542BB005}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\Combat\CombatSystem.h">
+      <Filter>include\Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Combat\DamagePacket.h">
+      <Filter>include\Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Combat\FrameData.h">
+      <Filter>include\Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Combat\Hitbox.h">
+      <Filter>include\Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Combat\Hurtbox.h">
+      <Filter>include\Combat</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Combat\CombatSystem.cpp">
+      <Filter>src\Combat</Filter>
+    </ClCompile>
+    <ClCompile Include="CombatEngine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

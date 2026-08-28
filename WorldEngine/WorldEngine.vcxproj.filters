@@ -1,0 +1,69 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{1F62D886-C763-509F-A97F-BD9F90DED041}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{FBBFFFDD-AF12-589F-AED6-FDDF1467D18B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{76B1CCD0-74D3-5105-BDE9-137D72263859}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\World">
+      <UniqueIdentifier>{FA60FC9D-CC99-5D2D-A587-6893D54CD4D0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\World\Biomes">
+      <UniqueIdentifier>{71D97D0F-F2FB-5E3E-B5B6-D3452AD4DF9C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\World\Chunk">
+      <UniqueIdentifier>{001F295B-4E66-582E-A949-C0BB11CE1B85}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\World\Structures">
+      <UniqueIdentifier>{0297DCD5-6BD4-512F-8CCB-A5A0BA38A2B8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{C2D13800-AAF8-5DE5-8674-EDED6C37A18B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\World">
+      <UniqueIdentifier>{2A43764B-68E9-5AF3-A584-63ECAF278FD7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\World\Chunk">
+      <UniqueIdentifier>{781FCFCF-E23F-5F90-84F5-DE0F5D42D09E}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\World\Biomes\BiomeSpec.h">
+      <Filter>include\World\Biomes</Filter>
+    </ClInclude>
+    <ClInclude Include="include\World\Chunk\Chunk.h">
+      <Filter>include\World\Chunk</Filter>
+    </ClInclude>
+    <ClInclude Include="include\World\Chunk\ChunkManager.h">
+      <Filter>include\World\Chunk</Filter>
+    </ClInclude>
+    <ClInclude Include="include\World\Structures\StructureSpec.h">
+      <Filter>include\World\Structures</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\World\Chunk\Chunk.cpp">
+      <Filter>src\World\Chunk</Filter>
+    </ClCompile>
+    <ClCompile Include="src\World\Chunk\ChunkManager.cpp">
+      <Filter>src\World\Chunk</Filter>
+    </ClCompile>
+    <ClCompile Include="WorldEngine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

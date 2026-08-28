@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)CoreEngine\include;$(SolutionDir)WorldEngine\include;$(SolutionDir)PhysicsEngine\include;$(SolutionDir)CombatEngine\include;$(SolutionDir)AIEngine\include;$(SolutionDir)WorldgenEngine\include;$(SolutionDir)RenderEngine\include;$(SolutionDir)MCReduxGame\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

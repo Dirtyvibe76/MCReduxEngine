@@ -1,0 +1,54 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{6A08C38B-1F06-5EC2-95F4-B167E0348ECF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{963292CB-CCAF-5BE4-8B2E-669A33E4001A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{90010CAA-F8BB-5A0F-B278-61361AD55205}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\Worldgen">
+      <UniqueIdentifier>{419F3543-142E-596A-936D-9D8365040000}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src">
+      <UniqueIdentifier>{3DE89317-4CDF-5F3C-A906-F23AC6FEF161}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Worldgen">
+      <UniqueIdentifier>{67E828AE-4692-5D50-996D-98099718F2C7}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\Worldgen\BiomeGenerator.h">
+      <Filter>include\Worldgen</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Worldgen\BossGenerator.h">
+      <Filter>include\Worldgen</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Worldgen\MobGenerator.h">
+      <Filter>include\Worldgen</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Worldgen\StructureGenerator.h">
+      <Filter>include\Worldgen</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Worldgen\Generators.cpp">
+      <Filter>src\Worldgen</Filter>
+    </ClCompile>
+    <ClCompile Include="WorldgenEngine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
