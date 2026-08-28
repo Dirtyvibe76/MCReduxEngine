@@ -16,6 +16,11 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <map>
+#include <memory>
+#include <set>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "d3d11.lib")
@@ -85,26 +90,107 @@ int terrain_height(const int x, const int z) noexcept {
     return std::clamp(5 + static_cast<int>(std::round(rolling)), 2, 9);
 }
 
-mcr::world::Chunk generate_demo_chunk() {
-    mcr::world::Chunk chunk{{0, 0}};
-    for (int z = 0; z < mcr::world::Chunk::width; ++z) {
-        for (int x = 0; x < mcr::world::Chunk::width; ++x) {
-            const int surface = terrain_height(x, z);
-            for (int y = 0; y <= surface; ++y) {
-                const mcr::world::Chunk::BlockId block =
-                    y == surface ? 1 : (y >= surface - 2 ? 2 : 3);
-                chunk.set_block(x, y, z, block);
+class ChunkWorld final {
+public:
+    using Key = std::pair<int, int>;
+    static constexpr int stream_radius = 2;
+
+    bool stream_around(const int center_x, const int center_z) {
+        std::set<Key> desired;
+        for (int z = center_z - stream_radius; z <= center_z + stream_radius; ++z) {
+            for (int x = center_x - stream_radius; x <= center_x + stream_radius; ++x) {
+                desired.emplace(x, z);
             }
         }
-    }
-    return chunk;
-}
 
-bool is_solid(const mcr::world::Chunk& chunk, const int x, const int y, const int z) noexcept {
-    if (x < 0 || x >= mcr::world::Chunk::width || y < 0 || y >= mcr::world::Chunk::height
-        || z < 0 || z >= mcr::world::Chunk::width) return false;
-    return chunk.block(x, y, z) != 0;
-}
+        bool changed = false;
+        for (auto it = chunks_.begin(); it != chunks_.end();) {
+            if (!desired.contains(it->first)) {
+                it = chunks_.erase(it);
+                changed = true;
+            } else {
+                ++it;
+            }
+        }
+        for (const auto& key : desired) {
+            if (!chunks_.contains(key)) {
+                chunks_.emplace(key, generate_chunk(key.first, key.second));
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    [[nodiscard]] mcr::world::Chunk::BlockId block(
+        const int world_x, const int y, const int world_z) const noexcept {
+        if (y < 0 || y >= mcr::world::Chunk::height) return 0;
+        const int chunk_x = floor_div(world_x, mcr::world::Chunk::width);
+        const int chunk_z = floor_div(world_z, mcr::world::Chunk::width);
+        const auto found = chunks_.find({chunk_x, chunk_z});
+        if (found == chunks_.end()) return 0;
+        return found->second->block(
+            world_x - chunk_x * mcr::world::Chunk::width, y,
+            world_z - chunk_z * mcr::world::Chunk::width);
+    }
+
+    bool set_block(const int world_x, const int y, const int world_z,
+                   const mcr::world::Chunk::BlockId block_id) {
+        if (y < 0 || y >= mcr::world::Chunk::height) return false;
+        const int chunk_x = floor_div(world_x, mcr::world::Chunk::width);
+        const int chunk_z = floor_div(world_z, mcr::world::Chunk::width);
+        const auto found = chunks_.find({chunk_x, chunk_z});
+        if (found == chunks_.end()) return false;
+        found->second->set_block(
+            world_x - chunk_x * mcr::world::Chunk::width, y,
+            world_z - chunk_z * mcr::world::Chunk::width, block_id);
+        overrides_[{world_x, y, world_z}] = block_id;
+        return true;
+    }
+
+    [[nodiscard]] const std::map<Key, std::unique_ptr<mcr::world::Chunk>>& chunks() const noexcept {
+        return chunks_;
+    }
+
+    [[nodiscard]] std::size_t loaded_count() const noexcept { return chunks_.size(); }
+
+private:
+    static int floor_div(const int value, const int divisor) noexcept {
+        int quotient = value / divisor;
+        if (value % divisor < 0) --quotient;
+        return quotient;
+    }
+
+    std::unique_ptr<mcr::world::Chunk> generate_chunk(const int chunk_x, const int chunk_z) {
+        auto chunk = std::make_unique<mcr::world::Chunk>(
+            mcr::world::ChunkCoord{chunk_x, chunk_z});
+        for (int z = 0; z < mcr::world::Chunk::width; ++z) {
+            for (int x = 0; x < mcr::world::Chunk::width; ++x) {
+                const int world_x = chunk_x * mcr::world::Chunk::width + x;
+                const int world_z = chunk_z * mcr::world::Chunk::width + z;
+                const int surface = terrain_height(world_x, world_z);
+                for (int y = 0; y <= surface; ++y) {
+                    const mcr::world::Chunk::BlockId block_id =
+                        y == surface ? 1 : (y >= surface - 2 ? 2 : 3);
+                    chunk->set_block(x, y, z, block_id);
+                }
+            }
+        }
+
+        for (const auto& [position, block_id] : overrides_) {
+            const auto [world_x, y, world_z] = position;
+            if (floor_div(world_x, mcr::world::Chunk::width) == chunk_x
+                && floor_div(world_z, mcr::world::Chunk::width) == chunk_z) {
+                chunk->set_block(
+                    world_x - chunk_x * mcr::world::Chunk::width, y,
+                    world_z - chunk_z * mcr::world::Chunk::width, block_id);
+            }
+        }
+        return chunk;
+    }
+
+    std::map<Key, std::unique_ptr<mcr::world::Chunk>> chunks_;
+    std::map<std::tuple<int, int, int>, mcr::world::Chunk::BlockId> overrides_;
+};
 
 std::array<float, 3> block_color(const mcr::world::Chunk::BlockId block) noexcept {
     switch (block) {
@@ -114,32 +200,39 @@ std::array<float, 3> block_color(const mcr::world::Chunk::BlockId block) noexcep
     }
 }
 
-std::vector<Vertex> mesh_chunk(const mcr::world::Chunk& chunk) {
+std::vector<Vertex> mesh_world(const ChunkWorld& world) {
     std::vector<Vertex> vertices;
-    vertices.reserve(12000);
+    vertices.reserve(world.loaded_count() * 12000);
     constexpr std::array<unsigned, 6> triangle_indices{0, 1, 2, 0, 2, 3};
 
-    for (int y = 0; y < mcr::world::Chunk::height; ++y) {
-        for (int z = 0; z < mcr::world::Chunk::width; ++z) {
-            for (int x = 0; x < mcr::world::Chunk::width; ++x) {
-                const auto block = chunk.block(x, y, z);
-                if (block == 0) continue;
-                const auto base_color = block_color(block);
-                const float variation =
-                    0.92F + static_cast<float>((x * 17 + y * 7 + z * 13) & 7) * 0.012F;
+    for (const auto& [key, chunk] : world.chunks()) {
+        const int base_x = key.first * mcr::world::Chunk::width;
+        const int base_z = key.second * mcr::world::Chunk::width;
+        for (int y = 0; y < mcr::world::Chunk::height; ++y) {
+            for (int z = 0; z < mcr::world::Chunk::width; ++z) {
+                for (int x = 0; x < mcr::world::Chunk::width; ++x) {
+                    const auto block = chunk->block(x, y, z);
+                    if (block == 0) continue;
+                    const int world_x = base_x + x;
+                    const int world_z = base_z + z;
+                    const auto base_color = block_color(block);
+                    const float variation = 0.92F
+                        + static_cast<float>((world_x * 17 + y * 7 + world_z * 13) & 7) * 0.012F;
 
-                for (const auto& face : block_faces) {
-                    if (is_solid(chunk, x + face.neighbor_x, y + face.neighbor_y,
-                                 z + face.neighbor_z)) continue;
-                    for (const unsigned corner_index : triangle_indices) {
-                        const auto& corner = face.corners[corner_index];
-                        vertices.push_back({
-                            {static_cast<float>(x) + corner[0], static_cast<float>(y) + corner[1],
-                             static_cast<float>(z) + corner[2]},
-                            {base_color[0] * face.shade * variation,
-                             base_color[1] * face.shade * variation,
-                             base_color[2] * face.shade * variation}
-                        });
+                    for (const auto& face : block_faces) {
+                        if (world.block(world_x + face.neighbor_x, y + face.neighbor_y,
+                                        world_z + face.neighbor_z) != 0) continue;
+                        for (const unsigned corner_index : triangle_indices) {
+                            const auto& corner = face.corners[corner_index];
+                            vertices.push_back({
+                                {static_cast<float>(world_x) + corner[0],
+                                 static_cast<float>(y) + corner[1],
+                                 static_cast<float>(world_z) + corner[2]},
+                                {base_color[0] * face.shade * variation,
+                                 base_color[1] * face.shade * variation,
+                                 base_color[2] * face.shade * variation}
+                            });
+                        }
                     }
                 }
             }
@@ -202,7 +295,7 @@ private:
         RECT rectangle{0, 0, static_cast<LONG>(window_width), static_cast<LONG>(window_height)};
         AdjustWindowRect(&rectangle, style, FALSE);
         window_ = CreateWindowExW(0, window_class.lpszClassName,
-            L"MC-Redux - Voxel Chunk + Fly Camera (DirectX 11)", style,
+            L"MC-Redux - Streamed Voxel World (DirectX 11)", style,
             CW_USEDEFAULT, CW_USEDEFAULT, rectangle.right - rectangle.left,
             rectangle.bottom - rectangle.top, nullptr, nullptr, instance_, nullptr);
         return window_ != nullptr;
@@ -286,18 +379,7 @@ private:
                                               &input_layout_)))
             return false;
 
-        const auto chunk = generate_demo_chunk();
-        const auto vertices = mesh_chunk(chunk);
-        if (vertices.empty()) return false;
-        vertex_count_ = static_cast<UINT>(vertices.size());
-        D3D11_BUFFER_DESC vertex_description{};
-        vertex_description.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(Vertex));
-        vertex_description.Usage = D3D11_USAGE_IMMUTABLE;
-        vertex_description.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA vertex_data{};
-        vertex_data.pSysMem = vertices.data();
-        if (FAILED(device_->CreateBuffer(&vertex_description, &vertex_data, &vertex_buffer_)))
-            return false;
+        if (!update_streaming(true)) return false;
 
         D3D11_BUFFER_DESC constant_description{};
         constant_description.ByteWidth = sizeof(SceneConstants);
@@ -319,6 +401,46 @@ private:
         viewport_.Height = static_cast<float>(window_height);
         viewport_.MinDepth = 0.0F;
         viewport_.MaxDepth = 1.0F;
+        return true;
+    }
+
+    bool rebuild_mesh() noexcept {
+        try {
+            const auto vertices = mesh_world(world_);
+            if (vertices.empty()) return false;
+            D3D11_BUFFER_DESC description{};
+            description.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(Vertex));
+            description.Usage = D3D11_USAGE_IMMUTABLE;
+            description.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA data{};
+            data.pSysMem = vertices.data();
+            ComPtr<ID3D11Buffer> replacement;
+            if (FAILED(device_->CreateBuffer(&description, &data, &replacement))) return false;
+            vertex_buffer_ = std::move(replacement);
+            vertex_count_ = static_cast<UINT>(vertices.size());
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    bool update_streaming(const bool force = false) noexcept {
+        const int chunk_x = static_cast<int>(
+            std::floor(camera_position_.x / static_cast<float>(mcr::world::Chunk::width)));
+        const int chunk_z = static_cast<int>(
+            std::floor(camera_position_.z / static_cast<float>(mcr::world::Chunk::width)));
+        if (!force && stream_center_valid_ && chunk_x == stream_center_x_
+            && chunk_z == stream_center_z_) return true;
+
+        try {
+            world_.stream_around(chunk_x, chunk_z);
+        } catch (...) {
+            return false;
+        }
+        if (!rebuild_mesh()) return false;
+        stream_center_x_ = chunk_x;
+        stream_center_z_ = chunk_z;
+        stream_center_valid_ = true;
         return true;
     }
 
@@ -362,17 +484,83 @@ private:
         }
     }
 
+    struct BlockHit final {
+        bool found{false};
+        int x{0};
+        int y{0};
+        int z{0};
+        int placement_x{0};
+        int placement_y{0};
+        int placement_z{0};
+    };
+
+    [[nodiscard]] BlockHit raycast_block(const XMVECTOR forward) const noexcept {
+        XMFLOAT3 direction{};
+        XMStoreFloat3(&direction, forward);
+        int previous_x = static_cast<int>(std::floor(camera_position_.x));
+        int previous_y = static_cast<int>(std::floor(camera_position_.y));
+        int previous_z = static_cast<int>(std::floor(camera_position_.z));
+
+        for (float distance = 0.0F; distance <= 8.0F; distance += 0.05F) {
+            const int x = static_cast<int>(
+                std::floor(camera_position_.x + direction.x * distance));
+            const int y = static_cast<int>(
+                std::floor(camera_position_.y + direction.y * distance));
+            const int z = static_cast<int>(
+                std::floor(camera_position_.z + direction.z * distance));
+            if (x == previous_x && y == previous_y && z == previous_z) continue;
+            if (world_.block(x, y, z) != 0) {
+                return {true, x, y, z, previous_x, previous_y, previous_z};
+            }
+            previous_x = x;
+            previous_y = y;
+            previous_z = z;
+        }
+        return {};
+    }
+
+    bool handle_block_edits(const XMVECTOR forward) noexcept {
+        const bool remove_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        const bool place_down = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+        bool changed = false;
+
+        try {
+            if (GetForegroundWindow() == window_ && remove_down && !remove_was_down_) {
+                const auto hit = raycast_block(forward);
+                changed = hit.found && world_.set_block(hit.x, hit.y, hit.z, 0);
+            }
+            if (GetForegroundWindow() == window_ && place_down && !place_was_down_) {
+                const auto hit = raycast_block(forward);
+                if (hit.found && world_.block(
+                        hit.placement_x, hit.placement_y, hit.placement_z) == 0) {
+                    changed = world_.set_block(
+                        hit.placement_x, hit.placement_y, hit.placement_z, 1) || changed;
+                }
+            }
+        } catch (...) {
+            remove_was_down_ = remove_down;
+            place_was_down_ = place_down;
+            return false;
+        }
+
+        remove_was_down_ = remove_down;
+        place_was_down_ = place_down;
+        return !changed || rebuild_mesh();
+    }
+
     bool render() noexcept {
         const auto now = std::chrono::steady_clock::now();
         const float delta_seconds =
             std::min(std::chrono::duration<float>(now - previous_frame_).count(), 0.1F);
         previous_frame_ = now;
         update_camera(delta_seconds);
+        if (!update_streaming()) return false;
 
         const XMVECTOR position = XMLoadFloat3(&camera_position_);
         const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
             std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_),
             std::cos(pitch_) * std::cos(yaw_), 0.0F));
+        if (!handle_block_edits(forward)) return false;
         const XMMATRIX view =
             XMMatrixLookToLH(position, forward, XMVectorSet(0, 1, 0, 0));
         const XMMATRIX projection = XMMatrixPerspectiveFovLH(
@@ -429,10 +617,16 @@ private:
     ComPtr<ID3D11RasterizerState> rasterizer_;
     D3D11_VIEWPORT viewport_{};
     UINT vertex_count_{0};
+    ChunkWorld world_;
     XMFLOAT3 camera_position_{8.0F, 11.0F, -16.0F};
     float yaw_{0.0F};
     float pitch_{-0.22F};
     bool mouse_looking_{false};
+    bool remove_was_down_{false};
+    bool place_was_down_{false};
+    bool stream_center_valid_{false};
+    int stream_center_x_{0};
+    int stream_center_z_{0};
     POINT previous_cursor_{};
     std::chrono::steady_clock::time_point previous_frame_{};
 };

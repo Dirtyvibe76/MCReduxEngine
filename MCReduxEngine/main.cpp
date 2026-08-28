@@ -12,8 +12,9 @@ int main() {
         if (!result.passed) return 1;
 
 #ifdef _WIN32
-        std::cout << "Opening the first generated MC-Redux voxel chunk...\n"
+        std::cout << "Opening the streamed MC-Redux voxel world...\n"
                   << "Controls: W/A/S/D move, Q/E descend/ascend, hold right mouse to look.\n"
+                  << "Left click removes a block. Middle click places a block.\n"
                   << "Hold Shift to move faster. Press Esc or close the window to exit.\n";
         mcr::render::D3D11Renderer renderer;
         if (!renderer.run_visual_demo()) {

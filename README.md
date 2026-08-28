@@ -11,13 +11,17 @@ This solution is the first compiling foundation for the standalone MC-Redux engi
 5. Press **Ctrl+F5**.
 
 The first run performs the engine smoke test and then opens a real DirectX 11
-window displaying a generated and exposed-face-meshed 16x256x16 voxel chunk.
+window displaying a generated 5x5 streaming window of exposed-face-meshed
+16x256x16 voxel chunks. The window follows the camera as it crosses chunk
+boundaries.
 
 ## Camera controls
 
 - `W`, `A`, `S`, `D`: move horizontally.
 - `Q` / `E`: descend / ascend.
 - Hold the right mouse button and drag: look around.
+- Left click: remove the targeted block.
+- Middle click: place a grass block against the targeted face.
 - Hold `Shift`: move faster.
 - `Esc`: exit.
 
@@ -29,7 +33,8 @@ window displaying a generated and exposed-face-meshed 16x256x16 voxel chunk.
 - `CombatEngine`: hit/hurt boxes, frame data, and damage packets.
 - `AIEngine`: reusable state-machine foundation.
 - `WorldgenEngine`: deterministic biome, mob, boss, and structure specs.
-- `RenderEngine`: DirectX 11 device, depth buffer, chunk mesher, shaders, and fly camera.
+- `RenderEngine`: DirectX 11 device, depth buffer, streamed chunk mesher,
+  persistent edit overrides, raycast block editing, shaders, and fly camera.
 - `MCReduxGame`: game-layer integration and player state.
 - `MCReduxEngine`: executable launcher and smoke test.
 
@@ -37,4 +42,4 @@ window displaying a generated and exposed-face-meshed 16x256x16 voxel chunk.
 
 This is an engine foundation, not the completed game. The large design document
 contains mechanics that must be implemented and tested incrementally. The next
-milestone is integrating chunk streaming and remeshing when blocks change.
+milestone is texture-atlas rendering and player collision with the voxel world.
