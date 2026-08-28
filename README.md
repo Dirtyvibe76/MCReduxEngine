@@ -20,8 +20,8 @@ boundaries.
 - `W`, `A`, `S`, `D`: move horizontally.
 - `Q` / `E`: descend / ascend.
 - Hold the right mouse button and drag: look around.
-- Left click: remove the targeted block.
-- Middle click: place a grass block against the targeted face.
+- Left click: remove the block under the mouse pointer.
+- Middle click: place a grass block against the face under the mouse pointer.
 - Hold `Shift`: move faster.
 - `Esc`: exit.
 

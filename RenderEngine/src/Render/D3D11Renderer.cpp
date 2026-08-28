@@ -519,18 +519,40 @@ private:
         return {};
     }
 
-    bool handle_block_edits(const XMVECTOR forward) noexcept {
+    [[nodiscard]] XMVECTOR pointer_ray(
+        const XMMATRIX& view, const XMMATRIX& projection,
+        const XMVECTOR fallback_direction) const noexcept {
+        POINT cursor{};
+        if (!GetCursorPos(&cursor) || !ScreenToClient(window_, &cursor)) {
+            return fallback_direction;
+        }
+
+        const XMVECTOR screen_near = XMVectorSet(
+            static_cast<float>(cursor.x), static_cast<float>(cursor.y), 0.0F, 1.0F);
+        const XMVECTOR screen_far = XMVectorSet(
+            static_cast<float>(cursor.x), static_cast<float>(cursor.y), 1.0F, 1.0F);
+        const XMMATRIX world = XMMatrixIdentity();
+        const XMVECTOR near_world = XMVector3Unproject(
+            screen_near, 0.0F, 0.0F, static_cast<float>(window_width),
+            static_cast<float>(window_height), 0.0F, 1.0F, projection, view, world);
+        const XMVECTOR far_world = XMVector3Unproject(
+            screen_far, 0.0F, 0.0F, static_cast<float>(window_width),
+            static_cast<float>(window_height), 0.0F, 1.0F, projection, view, world);
+        return XMVector3Normalize(XMVectorSubtract(far_world, near_world));
+    }
+
+    bool handle_block_edits(const XMVECTOR ray_direction) noexcept {
         const bool remove_down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         const bool place_down = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
         bool changed = false;
 
         try {
             if (GetForegroundWindow() == window_ && remove_down && !remove_was_down_) {
-                const auto hit = raycast_block(forward);
+                const auto hit = raycast_block(ray_direction);
                 changed = hit.found && world_.set_block(hit.x, hit.y, hit.z, 0);
             }
             if (GetForegroundWindow() == window_ && place_down && !place_was_down_) {
-                const auto hit = raycast_block(forward);
+                const auto hit = raycast_block(ray_direction);
                 if (hit.found && world_.block(
                         hit.placement_x, hit.placement_y, hit.placement_z) == 0) {
                     changed = world_.set_block(
@@ -560,13 +582,13 @@ private:
         const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
             std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_),
             std::cos(pitch_) * std::cos(yaw_), 0.0F));
-        if (!handle_block_edits(forward)) return false;
         const XMMATRIX view =
             XMMatrixLookToLH(position, forward, XMVectorSet(0, 1, 0, 0));
         const XMMATRIX projection = XMMatrixPerspectiveFovLH(
             XMConvertToRadians(65.0F),
             static_cast<float>(window_width) / static_cast<float>(window_height),
             0.1F, 250.0F);
+        if (!handle_block_edits(pointer_ray(view, projection, forward))) return false;
         SceneConstants constants{};
         XMStoreFloat4x4(&constants.view_projection,
                         XMMatrixTranspose(view * projection));
